@@ -157,7 +157,7 @@ func parseFileSystemSpec(s string) (*url.URL, error) {
 
 	if strings.Contains(s, ":") {
 		ss := strings.SplitN(s, ":", 2)
-		return &url.URL{Scheme: "ssh", Host: ss[0], Path: ss[1]}, nil
+		return &url.URL{Scheme: "sftp", Host: ss[0], Path: ss[1]}, nil
 	}
 
 	return &url.URL{Scheme: "file", Path: s}, nil
@@ -191,7 +191,7 @@ func makeFileSystemFromURL(u *url.URL) (fs.WriteableFileSystem, func(error) erro
 	case "file":
 		return fs.NewLocalFileSystem(u.Path), func(error) error { return nil }, nil
 
-	case "rsh", "ssh":
+	case "sftp":
 		host := u.Host
 		if u.Port() == "" {
 			// Note that ":ssh" doesn't work with the sftp
