@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	ignore = flag.String("ignore", "", "filter to apply to ignore some files")
+	ignoreSpec = flag.String("ignore", "", "filter to apply to ignore some files")
 )
 
 func main() {
@@ -35,7 +35,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := runUpload(ctx, flag.Arg(0), flag.Arg(1), *ignore); err != nil {
+	if err := runUpload(ctx, flag.Arg(0), flag.Arg(1), *ignoreSpec); err != nil {
 		glog.Error(err)
 		os.Exit(10)
 	}
