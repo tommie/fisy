@@ -1,10 +1,10 @@
 package fs
 
 import (
+	"errors"
 	"os"
 	"sync"
 	"time"
-	"errors"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/sync/errgroup"
@@ -104,7 +104,10 @@ type COWFileSystem struct {
 	copyGroup errgroup.Group
 }
 
-const latestPath Path = ".latest"
+const (
+	latestPath     Path = ".latest"
+	completeSuffix Path = ".complete"
+)
 
 func NewCOWFileSystem(fs WriteableFileSystem, host string, t time.Time) (*COWFileSystem, error) {
 	if host == "" {
@@ -156,9 +159,15 @@ func (fs *COWFileSystem) atomicSymlink(oldpath Path, newpath Path) error {
 }
 
 func (fs *COWFileSystem) Finish() error {
+	// Mark it as complete.
+	if err := fs.atomicSymlink(fs.wroot.Base(), fs.wroot.Dir().Resolve(fs.wroot.Base()+completeSuffix)); err != nil {
+		return err
+	}
+	// Mark it as the latest in this host.
 	if err := fs.atomicSymlink(fs.wroot.Base(), fs.wroot.Dir().Resolve(latestPath)); err != nil {
 		return err
 	}
+	// Mark it as the latest overall.
 	return fs.atomicSymlink(fs.wroot, latestPath)
 }
 
