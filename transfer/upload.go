@@ -95,7 +95,7 @@ func (u *Upload) process(ctx context.Context, fp *filePair) error {
 	if isDir {
 		filterPath += "/"
 	}
-	if !u.ignoreFilter(filterPath) {
+	if u.ignoreFilter(filterPath) {
 		if isDir {
 			atomic.AddUint64(&u.stats.IgnoredDirectories, 1)
 		} else {
