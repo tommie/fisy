@@ -8,7 +8,9 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/golang/glog"
@@ -29,6 +31,25 @@ func main() {
 	ctx := context.Background()
 
 	flag.Parse()
+
+	if flag.NArg() == 1 {
+		cmd := exec.Command(os.ExpandEnv("$HOME/.config/fisy/") + flag.Arg(0) + ".alias")
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		err := cmd.Run()
+		if err == nil {
+			return
+		}
+		if e, ok := err.(*exec.ExitError); ok {
+			if ee, ok := e.Sys().(*syscall.WaitStatus); ok {
+				os.Exit(ee.ExitStatus())
+			}
+		}
+
+		glog.Error(err)
+		os.Exit(1)
+	}
 
 	if flag.NArg() != 2 {
 		glog.Error("expected two arguments")
