@@ -21,6 +21,7 @@ const commonModeMask os.FileMode = 0xFFFFF
 type Upload struct {
 	src  fs.ReadableFileSystem
 	dest fs.WriteableFileSystem
+	ignoreFilter func(fs.Path) bool
 
 	srcInodes map[uint64]*inodeInfo
 	c         *sync.Cond
@@ -42,10 +43,11 @@ type filePair struct {
 	linkToInode uint64
 }
 
-func NewUpload(dest fs.WriteableFileSystem, src fs.ReadableFileSystem) *Upload {
-	return &Upload{
+func NewUpload(dest fs.WriteableFileSystem, src fs.ReadableFileSystem, opts... UploadOpt) *Upload {
+	u := &Upload{
 		src:  src,
 		dest: dest,
+		ignoreFilter: func(fs.Path) bool { return false },
 
 		srcInodes: map[uint64]*inodeInfo{},
 		c:         sync.NewCond(&sync.Mutex{}),
@@ -54,6 +56,18 @@ func NewUpload(dest fs.WriteableFileSystem, src fs.ReadableFileSystem) *Upload {
 		stats: UploadStats{
 			lastPath: &atomic.Value{},
 		},
+	}
+	for _, opt := range opts {
+		opt(u)
+	}
+	return u
+}
+
+type UploadOpt func(*Upload)
+
+func WithIgnoreFilter(fun func(fs.Path) bool) UploadOpt {
+	return func(u *Upload) {
+		u.ignoreFilter = fun
 	}
 }
 
@@ -76,6 +90,21 @@ func (u *Upload) Run(ctx context.Context) (err error) {
 }
 
 func (u *Upload) process(ctx context.Context, fp *filePair) error {
+	isDir := fp.src != nil && fp.src.IsDir() || fp.dest != nil && fp.dest.IsDir()
+	filterPath := "/" + fp.path
+	if isDir {
+		filterPath += "/"
+	}
+	if !u.ignoreFilter(filterPath) {
+		if isDir {
+			atomic.AddUint64(&u.stats.IgnoredDirectories, 1)
+		} else {
+			atomic.AddUint64(&u.stats.IgnoredFiles, 1)
+		}
+		glog.V(3).Infof("Ignored %q.", fp.path)
+		return nil
+	}
+
 	var fps []*filePair
 	err := func() error {
 		if err := u.sem.Acquire(ctx, 1); err != nil {
@@ -396,6 +425,9 @@ func (u *Upload) Stats() UploadStats {
 		RemovedFiles: atomic.LoadUint64(&u.stats.RemovedFiles),
 		RemovedDirectories: atomic.LoadUint64(&u.stats.RemovedDirectories),
 
+		IgnoredFiles: atomic.LoadUint64(&u.stats.IgnoredFiles),
+		IgnoredDirectories: atomic.LoadUint64(&u.stats.IgnoredDirectories),
+
 		lastPath: u.stats.lastPath,
 	}
 }
@@ -417,6 +449,9 @@ type UploadStats struct {
 
 	RemovedFiles       uint64
 	RemovedDirectories uint64
+
+	IgnoredFiles uint64
+	IgnoredDirectories uint64
 
 	lastPath *atomic.Value // string
 }

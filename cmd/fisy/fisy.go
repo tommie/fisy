@@ -13,11 +13,16 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/pkg/sftp"
+	"github.com/sabhiram/go-gitignore"
 	"github.com/tommie/fisy/fs"
 	"github.com/tommie/fisy/transfer"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 	"golang.org/x/crypto/ssh/knownhosts"
+)
+
+var (
+	ignore = flag.String("ignore", "", "filter to apply to ignore some files")
 )
 
 func main() {
@@ -30,13 +35,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := runUpload(ctx, flag.Arg(0), flag.Arg(1)); err != nil {
+	if err := runUpload(ctx, flag.Arg(0), flag.Arg(1), *ignore); err != nil {
 		glog.Error(err)
 		os.Exit(10)
 	}
 }
 
-func runUpload(ctx context.Context, srcSpec, destSpec string) (rerr error) {
+func runUpload(ctx context.Context, srcSpec, destSpec, ignoreSpec string) (rerr error) {
+	filter, err := parseIgnoreFilter(ignoreSpec)
+	if err != nil {
+		return err
+	}
+
 	src, srcClose, err := makeFileSystem(srcSpec)
 	if err != nil {
 		return err
@@ -54,11 +64,11 @@ func runUpload(ctx context.Context, srcSpec, destSpec string) (rerr error) {
 	}()
 
 	start := time.Now()
-	u := transfer.NewUpload(dest, src)
+	u := transfer.NewUpload(dest, src, transfer.WithIgnoreFilter(filter))
 	stopCh := make(chan struct{})
 
 	go func() {
-		t := time.NewTicker(1*time.Second)
+		t := time.NewTicker(10 * time.Second)
 		defer t.Stop()
 		for {
 			showStats(u)
@@ -217,5 +227,16 @@ func newSFTPFileSystem(host, path string) (fs.WriteableFileSystem, func() error,
 			return err
 		}
 		return agentConn.Close()
+	}, nil
+}
+
+func parseIgnoreFilter(lines string) (func(fs.Path) bool, error) {
+	gi, err := ignore.CompileIgnoreLines(strings.Split(lines, "\n")...)
+	if err != nil {
+		return nil, err
+	}
+
+	return func(p fs.Path) bool {
+		return gi.MatchesPath(string(p))
 	}, nil
 }
