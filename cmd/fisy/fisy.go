@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"net/url"
 	"os"
 	"os/exec"
@@ -25,6 +27,7 @@ import (
 )
 
 var (
+	httpAddr   = flag.String("http-addr", "", "address to listen for HTTP requests on")
 	ignoreSpec = flag.String("ignore", "", "filter to apply to ignore some files")
 )
 
@@ -71,6 +74,22 @@ func runUpload(ctx context.Context, srcSpec, destSpec, ignoreSpec string) (rerr 
 		glog.Warningf("couldn't get terminal size (defaulting to %v): %v", tw, err)
 	}
 	tw -= 1 // One character margin.
+
+	if *httpAddr != "" {
+		ln, err := net.Listen("tcp", *httpAddr)
+		if err != nil {
+			return err
+		}
+
+		go func() {
+			defer ln.Close()
+
+			server := &http.Server{Addr: ln.Addr().String(), Handler: nil}
+			if err := server.Serve(ln); err != nil {
+				glog.Exit(err)
+			}
+		}()
+	}
 
 	filter, err := parseIgnoreFilter(ignoreSpec)
 	if err != nil {
