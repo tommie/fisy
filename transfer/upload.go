@@ -202,14 +202,20 @@ func readdir(fs fs.ReadableFileSystem, path fs.Path) ([]os.FileInfo, error) {
 func (u *Upload) transfer(fp *filePair) (err error) {
 	u.stats.lastPath.Store(fp)
 
-	if fp.src == nil {
-		if fp.dest.IsDir() {
-			// Removed directory.
-			glog.V(1).Infof("Removing directory %q...", fp.path)
-			atomic.AddUint64(&u.stats.RemovedDirectories, 1)
-			return u.dest.RemoveAll(fp.path)
-		}
+	fi := fp.src
+	if fi == nil {
+		fi = fp.dest
+	}
 
+	if fi.IsDir() {
+		return u.transferDirectory(fp)
+	}
+
+	return u.transferFile(fp)
+}
+
+func (u *Upload) transferFile(fp *filePair) (err error) {
+	if fp.src == nil {
 		// Removed file.
 		glog.V(1).Infof("Removing file %q...", fp.path)
 		atomic.AddUint64(&u.stats.RemovedFiles, 1)
@@ -219,46 +225,14 @@ func (u *Upload) transfer(fp *filePair) (err error) {
 	if fp.dest != nil && !needsTransfer(fp.dest, fp.src) {
 		glog.V(1).Infof("Keeping file %q...", fp.path)
 		if err := u.dest.Keep(fp.path); err == nil {
-			if fp.dest.IsDir() {
-				atomic.AddUint64(&u.stats.KeptDirectories, 1)
-			} else {
-				atomic.AddUint64(&u.stats.KeptBytes, uint64(fp.dest.Size()))
-				atomic.AddUint64(&u.stats.KeptFiles, 1)
-			}
+			atomic.AddUint64(&u.stats.KeptBytes, uint64(fp.dest.Size()))
+			atomic.AddUint64(&u.stats.KeptFiles, 1)
 			return nil
 		} else {
 			glog.V(2).Infof("Failed to keep: %v", err)
 		}
 
 		// Fall back to normal transfer.
-	}
-
-	if fp.src.IsDir() {
-		// Directory.
-		uid := -1
-		gid := -1
-		if sstat, ok := fp.src.Sys().(*syscall.Stat_t); ok {
-			uid = int(sstat.Uid)
-			gid = int(sstat.Gid)
-		}
-
-		if fp.dest == nil {
-			glog.V(1).Infof("Creating directory %q...", fp.path)
-			atomic.AddUint64(&u.stats.CreatedDirectories, 1)
-			// We force u+w so we can continue working on the directory.
-			return u.dest.Mkdir(fp.path, fp.src.Mode()&commonModeMask|0200, uid, gid)
-		}
-
-		glog.V(1).Infof("Updating directory %q (%+v %+v)...", fp.path, fp.src.ModTime(), fp.dest.ModTime())
-		// We force u+w so we can continue working on the directory.
-		if err := u.dest.Chmod(fp.path, fp.src.Mode()&commonModeMask|0200); err != nil {
-			return err
-		}
-		if err := u.dest.Lchown(fp.path, uid, gid); err != nil {
-			return err
-		}
-		atomic.AddUint64(&u.stats.UpdatedDirectories, 1)
-		return nil
 	}
 
 	if fp.linkToInode != 0 {
@@ -332,6 +306,53 @@ func (u *Upload) transfer(fp *filePair) (err error) {
 
 	atomic.AddUint64(&u.stats.UploadedBytes, uint64(fp.src.Size()))
 	atomic.AddUint64(&u.stats.UploadedFiles, 1)
+
+	return nil
+}
+
+func (u *Upload) transferDirectory(fp *filePair) (err error) {
+	if fp.src == nil {
+		// Removed directory.
+		glog.V(1).Infof("Removing directory %q...", fp.path)
+		atomic.AddUint64(&u.stats.RemovedDirectories, 1)
+		return u.dest.RemoveAll(fp.path)
+	}
+
+	if fp.dest != nil && !needsTransfer(fp.dest, fp.src) {
+		glog.V(1).Infof("Keeping directory %q...", fp.path)
+		if err := u.dest.Keep(fp.path); err == nil {
+			atomic.AddUint64(&u.stats.KeptDirectories, 1)
+			return nil
+		} else {
+			glog.V(2).Infof("Failed to keep: %v", err)
+		}
+
+		// Fall back to normal transfer.
+	}
+
+	uid := -1
+	gid := -1
+	if sstat, ok := fp.src.Sys().(*syscall.Stat_t); ok {
+		uid = int(sstat.Uid)
+		gid = int(sstat.Gid)
+	}
+
+	if fp.dest == nil {
+		glog.V(1).Infof("Creating directory %q...", fp.path)
+		atomic.AddUint64(&u.stats.CreatedDirectories, 1)
+		// We force u+w so we can continue working on the directory.
+		return u.dest.Mkdir(fp.path, fp.src.Mode()&commonModeMask|0200, uid, gid)
+	}
+
+	glog.V(1).Infof("Updating directory %q (%+v %+v)...", fp.path, fp.src.ModTime(), fp.dest.ModTime())
+	// We force u+w so we can continue working on the directory.
+	if err := u.dest.Chmod(fp.path, fp.src.Mode()&commonModeMask|0200); err != nil {
+		return err
+	}
+	if err := u.dest.Lchown(fp.path, uid, gid); err != nil {
+		return err
+	}
+	atomic.AddUint64(&u.stats.UpdatedDirectories, 1)
 
 	return nil
 }
