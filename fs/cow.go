@@ -51,7 +51,8 @@ func (fs *cowFileSystem) Keep(path Path) error {
 		gid = int(fs.GID)
 	}
 
-	return fs.fs.Mkdir(fs.wroot.Resolve(path), fi.Mode(), uid, gid)
+	// We force u+w so we can continue working on the directory.
+	return fs.fs.Mkdir(fs.wroot.Resolve(path), fi.Mode()|0200, uid, gid)
 }
 
 func (fs *cowFileSystem) Mkdir(path Path, mode os.FileMode, uid, gid int) error {

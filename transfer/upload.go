@@ -285,11 +285,13 @@ func (u *Upload) transfer(fp *filePair) (err error) {
 		if fp.dest == nil {
 			glog.V(1).Infof("Creating directory %q...", fp.path)
 			atomic.AddUint64(&u.stats.CreatedDirectories, 1)
-			return u.dest.Mkdir(fp.path, fp.src.Mode()&commonModeMask, uid, gid)
+			// We force u+w so we can continue working on the directory.
+			return u.dest.Mkdir(fp.path, fp.src.Mode()&commonModeMask|0200, uid, gid)
 		}
 
 		glog.V(1).Infof("Updating directory %q (%+v %+v)...", fp.path, fp.src.ModTime(), fp.dest.ModTime())
-		if err := u.dest.Chmod(fp.path, fp.src.Mode()&commonModeMask); err != nil {
+		// We force u+w so we can continue working on the directory.
+		if err := u.dest.Chmod(fp.path, fp.src.Mode()&commonModeMask|0200); err != nil {
 			return err
 		}
 		if err := u.dest.Lchown(fp.path, uid, gid); err != nil {
@@ -399,7 +401,8 @@ func (u *Upload) transfer(fp *filePair) (err error) {
 
 func needsTransfer(dest, src os.FileInfo) bool {
 	if dest.IsDir() {
-		return dest.Mode()&commonModeMask != src.Mode()&commonModeMask
+		// We force u+w so we can continue working on the directory.
+		return dest.Mode()&commonModeMask&^0200 != src.Mode()&commonModeMask&^0200
 	}
 	return dest.Size() != src.Size() ||
 		dest.Mode()&commonModeMask != src.Mode()&commonModeMask ||
