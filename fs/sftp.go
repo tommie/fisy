@@ -83,11 +83,13 @@ func (fs *SFTPFileSystem) Mkdir(path Path, mode os.FileMode, uid, gid int) error
 		if IsExist(err) {
 			return &os.PathError{Op: "sftp:mkdir", Path: p, Err: err}
 		}
-		// openssh sftp-server.c doesn't return FILE_ALREADY_EXISTS.
-		if _, err := fs.client.Lstat(p); err != nil {
-			return &os.PathError{Op: "sftp:lstat", Path: p, Err: err}
+		// openssh sftp-server.c doesn't return
+		// FILE_ALREADY_EXISTS. If Lstat succeeds, it means
+		// the file already existed.
+		if _, err2 := fs.client.Lstat(p); err2 == nil {
+			err = os.ErrExist
 		}
-		return &os.PathError{Op: "sftp:mkdir", Path: p, Err: os.ErrExist}
+		return &os.PathError{Op: "sftp:mkdir", Path: p, Err: err}
 	}
 	if err := fs.client.Chmod(p, mode); err != nil {
 		fs.client.RemoveDirectory(p)
