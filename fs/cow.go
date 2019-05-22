@@ -75,11 +75,13 @@ func (fs *cowFileSystem) Rename(oldpath Path, newpath Path) error {
 }
 
 func (fs *cowFileSystem) RemoveAll(path Path) error {
-	return fs.fs.RemoveAll(fs.wroot.Resolve(path))
+	// Nothing to do.
+	return nil
 }
 
 func (fs *cowFileSystem) Remove(path Path) error {
-	return fs.fs.Remove(fs.wroot.Resolve(path))
+	// Nothing to do.
+	return nil
 }
 
 func (fs *cowFileSystem) Stat() (FSInfo, error) {
