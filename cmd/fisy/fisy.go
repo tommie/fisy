@@ -21,6 +21,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 	"golang.org/x/crypto/ssh/knownhosts"
+	"golang.org/x/crypto/ssh/terminal"
 )
 
 var (
@@ -30,6 +31,7 @@ var (
 func main() {
 	ctx := context.Background()
 
+	flag.Set("stderrthreshold", "WARNING")
 	flag.Parse()
 
 	if flag.NArg() == 1 {
@@ -63,6 +65,13 @@ func main() {
 }
 
 func runUpload(ctx context.Context, srcSpec, destSpec, ignoreSpec string) (rerr error) {
+	tw, _, err := terminal.GetSize(int(os.Stdout.Fd()))
+	if err != nil {
+		tw = 80
+		glog.Warningf("couldn't get terminal size (defaulting to %v): %v", tw, err)
+	}
+	tw -= 1 // One character margin.
+
 	filter, err := parseIgnoreFilter(ignoreSpec)
 	if err != nil {
 		return err
@@ -89,10 +98,10 @@ func runUpload(ctx context.Context, srcSpec, destSpec, ignoreSpec string) (rerr 
 	stopCh := make(chan struct{})
 
 	go func() {
-		t := time.NewTicker(10 * time.Second)
+		t := time.NewTicker(1 * time.Second)
 		defer t.Stop()
 		for {
-			showStats(u)
+			showStats(u, tw)
 
 			select {
 			case <-stopCh:
@@ -108,7 +117,7 @@ func runUpload(ctx context.Context, srcSpec, destSpec, ignoreSpec string) (rerr 
 	}
 	close(stopCh)
 
-	showStats(u)
+	showStats(u, tw)
 	fmt.Println()
 
 	glog.Infof("All done in %v: %+v", time.Now().Sub(start), u.Stats())
@@ -116,9 +125,13 @@ func runUpload(ctx context.Context, srcSpec, destSpec, ignoreSpec string) (rerr 
 	return nil
 }
 
-func showStats(u *transfer.Upload) {
+func showStats(u *transfer.Upload, maxLength int) {
 	st := u.Stats()
-	fmt.Printf("\033[2K%5d / %7v: %s\033[1G", st.SourceFiles, storageBytes(st.UploadedBytes), st.LastPath())
+	s := fmt.Sprintf("\033[2K%5d / %7v / %d / %d: %c %s\033[1G", st.SourceFiles, storageBytes(st.UploadedBytes), st.InProgress, st.InodeTable, st.LastFileOperation(), st.LastPath())
+	if len(s) > maxLength {
+		s = s[:maxLength]
+	}
+	fmt.Print(s)
 }
 
 type storageBytes uint64
