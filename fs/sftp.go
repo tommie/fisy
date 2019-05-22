@@ -11,11 +11,11 @@ import (
 )
 
 type SFTPFileSystem struct {
-	client *sftp.Client
+	client SFTPClient
 	root   Path
 }
 
-func NewSFTPFileSystem(client *sftp.Client, root Path) *SFTPFileSystem {
+func NewSFTPFileSystem(client SFTPClient, root Path) *SFTPFileSystem {
 	return &SFTPFileSystem{
 		client: client,
 		root:   root,
@@ -34,7 +34,7 @@ func (fs *SFTPFileSystem) Open(path Path) (FileReader, error) {
 type sftpFileReader struct {
 	*sftp.File
 
-	client *sftp.Client
+	client SFTPClient
 }
 
 func (fr *sftpFileReader) Readdir() ([]os.FileInfo, error) {
@@ -66,7 +66,7 @@ func (fs *SFTPFileSystem) Create(path Path) (FileWriter, error) {
 type sftpFileWriter struct {
 	*sftp.File
 
-	client *sftp.Client
+	client SFTPClient
 }
 
 func (fw *sftpFileWriter) Chtimes(atime time.Time, mtime time.Time) error {
