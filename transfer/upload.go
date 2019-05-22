@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"sort"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -13,27 +12,27 @@ import (
 	"github.com/golang/glog"
 	"github.com/tommie/fisy/fs"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/sync/semaphore"
+)
+
+type FileOperation rune
+
+const (
+	UnknownFileOperation FileOperation = '?'
+	Create               FileOperation = 'C'
+	Remove               FileOperation = 'R'
+	Keep                 FileOperation = 'K'
 )
 
 const commonModeMask os.FileMode = 0xFFFFF
 
 type Upload struct {
-	src  fs.ReadableFileSystem
-	dest fs.WriteableFileSystem
+	src          fs.ReadableFileSystem
+	dest         fs.WriteableFileSystem
 	ignoreFilter func(fs.Path) bool
 
-	srcInodes map[uint64]*inodeInfo
-	c         *sync.Cond
-	sem       *semaphore.Weighted
+	srcLinks linkSet
 
-	stats     UploadStats
-}
-
-type inodeInfo struct {
-	path     fs.Path
-	uploaded bool
-	nlink    int
+	stats UploadStats
 }
 
 type filePair struct {
@@ -43,15 +42,15 @@ type filePair struct {
 	linkToInode uint64
 }
 
-func NewUpload(dest fs.WriteableFileSystem, src fs.ReadableFileSystem, opts... UploadOpt) *Upload {
+func NewUpload(dest fs.WriteableFileSystem, src fs.ReadableFileSystem, opts ...UploadOpt) *Upload {
+	const conc = 128
+
 	u := &Upload{
-		src:  src,
-		dest: dest,
+		src:          src,
+		dest:         dest,
 		ignoreFilter: func(fs.Path) bool { return false },
 
-		srcInodes: map[uint64]*inodeInfo{},
-		c:         sync.NewCond(&sync.Mutex{}),
-		sem:       semaphore.NewWeighted(128),
+		srcLinks: newLinkSet(),
 
 		stats: UploadStats{
 			lastPath: &atomic.Value{},
@@ -71,25 +70,28 @@ func WithIgnoreFilter(fun func(fs.Path) bool) UploadOpt {
 	}
 }
 
-func (u *Upload) Run(ctx context.Context) (err error) {
-	var eg errgroup.Group
-
+func (u *Upload) Run(ctx context.Context) error {
 	fps, err := u.listDir(fs.Path("."))
 	if err != nil {
 		return err
 	}
 
-	for _, fp := range fps {
-		fp := fp
-		eg.Go(func() error {
-			return u.process(ctx, fp)
-		})
-	}
-
-	return eg.Wait()
+	return filePairPDFS(ctx, fps, u.process, 128)
 }
 
-func (u *Upload) process(ctx context.Context, fp *filePair) error {
+func (u *Upload) process(ctx context.Context, fp *filePair) ([]*filePair, error) {
+	atomic.AddUint32(&u.stats.InProgress, 1)
+	defer atomic.AddUint32(&u.stats.InProgress, ^uint32(0))
+
+	if fp.src != nil {
+		if fp.src.IsDir() {
+			atomic.AddUint64(&u.stats.SourceDirectories, 1)
+		} else {
+			atomic.AddUint64(&u.stats.SourceBytes, uint64(fp.src.Size()))
+			atomic.AddUint64(&u.stats.SourceFiles, 1)
+		}
+	}
+
 	isDir := fp.src != nil && fp.src.IsDir() || fp.dest != nil && fp.dest.IsDir()
 	filterPath := "/" + fp.path
 	if isDir {
@@ -102,50 +104,22 @@ func (u *Upload) process(ctx context.Context, fp *filePair) error {
 			atomic.AddUint64(&u.stats.IgnoredFiles, 1)
 		}
 		glog.V(3).Infof("Ignored %q.", fp.path)
-		return nil
+		return nil, nil
 	}
 
 	var fps []*filePair
-	err := func() error {
-		if err := u.sem.Acquire(ctx, 1); err != nil {
-			return err
-		}
-		defer u.sem.Release(1)
-
-		if fp.src != nil {
-			if fp.src.IsDir() {
-				atomic.AddUint64(&u.stats.SourceDirectories, 1)
-			} else {
-				atomic.AddUint64(&u.stats.SourceBytes, uint64(fp.src.Size()))
-				atomic.AddUint64(&u.stats.SourceFiles, 1)
-			}
-		}
-
-		var eg errgroup.Group
-		if fp.src != nil && fp.src.IsDir() {
-			eg.Go(func() error {
-				var err error
-				fps, err = u.listDir(fp.path)
-				return err
-			})
-		}
-		eg.Go(func() error {
-			return u.transfer(fp)
-		})
-		return eg.Wait()
-	}()
-	if err != nil {
-		return err
-	}
-
 	var eg errgroup.Group
-	for _, fp := range fps {
-		fp := fp
+	if fp.src != nil && fp.src.IsDir() {
 		eg.Go(func() error {
-			return u.process(ctx, fp)
+			var err error
+			fps, err = u.listDir(fp.path)
+			return err
 		})
 	}
-	return eg.Wait()
+	eg.Go(func() error {
+		return u.transfer(fp)
+	})
+	return fps, eg.Wait()
 }
 
 func (u *Upload) listDir(path fs.Path) ([]*filePair, error) {
@@ -209,21 +183,7 @@ func (u *Upload) listDir(path fs.Path) ([]*filePair, error) {
 
 	for _, fp := range fps {
 		// Allow hardlinks if possible.
-		if fp.src != nil {
-			if st, ok := fp.src.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
-				u.c.L.Lock()
-				if _, ok := u.srcInodes[st.Ino]; !ok {
-					u.srcInodes[st.Ino] = &inodeInfo{
-						path: fp.path,
-						// Discount the first link.
-						nlink: int(st.Nlink) - 1,
-					}
-				} else {
-					fp.linkToInode = st.Ino
-				}
-				u.c.L.Unlock()
-			}
-		}
+		u.srcLinks.Offer(fp)
 	}
 
 	return fps, nil
@@ -302,43 +262,14 @@ func (u *Upload) transfer(fp *filePair) (err error) {
 	}
 
 	if fp.linkToInode != 0 {
-		u.c.L.Lock()
-		if firstPath := u.srcInodes[fp.linkToInode].path; firstPath != fp.path {
-			// We should hardlink. It is safe to block
-			// here since we know firstPath was
-			// transferred before us.
-			for !u.srcInodes[fp.linkToInode].uploaded {
-				u.c.Wait()
-			}
-			u.srcInodes[fp.linkToInode].nlink--
-			if u.srcInodes[fp.linkToInode].nlink == 0 {
-				// Clean up. We don't need this in memory anymore.
-				delete(u.srcInodes, fp.linkToInode)
-			}
-			u.c.L.Unlock()
+		if firstPath := u.srcLinks.FinishedLinkPath(fp); firstPath != "" {
 			glog.V(1).Infof("Hard-linking file %q to %q...", fp.path, firstPath)
 			atomic.AddUint64(&u.stats.UploadedFiles, 1)
 			return u.dest.Link(firstPath, fp.path)
 		}
-		u.c.L.Unlock()
 
-		defer func() {
-			u.c.L.Lock()
-			defer u.c.L.Unlock()
-
-			// If we failed to upload, this will cause
-			// other transfers to fail as well.
-			u.srcInodes[fp.linkToInode].uploaded = true
-			u.srcInodes[fp.linkToInode].nlink--
-			u.c.Broadcast()
-		}()
+		defer u.srcLinks.Fulfill(fp)
 	}
-
-	sf, err := u.src.Open(fp.path)
-	if err != nil {
-		return err
-	}
-	defer sf.Close()
 
 	if fp.src.Mode()&os.ModeSymlink != 0 {
 		// We should symlink.
@@ -352,12 +283,18 @@ func (u *Upload) transfer(fp *filePair) (err error) {
 		return u.dest.Symlink(linkdest, fp.path)
 	}
 
-	atime := fp.src.ModTime()
+	sf, err := u.src.Open(fp.path)
+	if err != nil {
+		return err
+	}
+	defer sf.Close()
+
 	df, err := u.dest.Create(fp.path)
 	if err != nil {
 		return err
 	}
 
+	atime := fp.src.ModTime()
 	err = func() error {
 		if err := df.Chmod(fp.src.Mode() & commonModeMask); err != nil {
 			return err
@@ -378,8 +315,8 @@ func (u *Upload) transfer(fp *filePair) (err error) {
 		return nil
 	}()
 	if err != nil {
-		u.dest.Remove(fp.path)
 		df.Close()
+		u.dest.Remove(fp.path)
 		return err
 	}
 
@@ -411,8 +348,11 @@ func needsTransfer(dest, src os.FileInfo) bool {
 
 func (u *Upload) Stats() UploadStats {
 	return UploadStats{
-		SourceBytes: atomic.LoadUint64(&u.stats.SourceBytes),
-		SourceFiles: atomic.LoadUint64(&u.stats.SourceFiles),
+		InProgress: atomic.LoadUint32(&u.stats.InProgress),
+		InodeTable: uint32(u.srcLinks.Len()),
+
+		SourceBytes:       atomic.LoadUint64(&u.stats.SourceBytes),
+		SourceFiles:       atomic.LoadUint64(&u.stats.SourceFiles),
 		SourceDirectories: atomic.LoadUint64(&u.stats.SourceDirectories),
 
 		UploadedBytes: atomic.LoadUint64(&u.stats.UploadedBytes),
@@ -421,14 +361,14 @@ func (u *Upload) Stats() UploadStats {
 		CreatedDirectories: atomic.LoadUint64(&u.stats.CreatedDirectories),
 		UpdatedDirectories: atomic.LoadUint64(&u.stats.UpdatedDirectories),
 
-		KeptBytes: atomic.LoadUint64(&u.stats.KeptBytes),
-		KeptFiles: atomic.LoadUint64(&u.stats.KeptFiles),
+		KeptBytes:       atomic.LoadUint64(&u.stats.KeptBytes),
+		KeptFiles:       atomic.LoadUint64(&u.stats.KeptFiles),
 		KeptDirectories: atomic.LoadUint64(&u.stats.KeptDirectories),
 
-		RemovedFiles: atomic.LoadUint64(&u.stats.RemovedFiles),
+		RemovedFiles:       atomic.LoadUint64(&u.stats.RemovedFiles),
 		RemovedDirectories: atomic.LoadUint64(&u.stats.RemovedDirectories),
 
-		IgnoredFiles: atomic.LoadUint64(&u.stats.IgnoredFiles),
+		IgnoredFiles:       atomic.LoadUint64(&u.stats.IgnoredFiles),
 		IgnoredDirectories: atomic.LoadUint64(&u.stats.IgnoredDirectories),
 
 		lastPath: u.stats.lastPath,
@@ -436,6 +376,9 @@ func (u *Upload) Stats() UploadStats {
 }
 
 type UploadStats struct {
+	InProgress uint32
+	InodeTable uint32
+
 	SourceBytes       uint64
 	SourceFiles       uint64
 	SourceDirectories uint64
@@ -453,7 +396,7 @@ type UploadStats struct {
 	RemovedFiles       uint64
 	RemovedDirectories uint64
 
-	IgnoredFiles uint64
+	IgnoredFiles       uint64
 	IgnoredDirectories uint64
 
 	lastPath *atomic.Value // *filePath
@@ -464,4 +407,18 @@ func (us *UploadStats) LastPath() string {
 		return string(fp.path)
 	}
 	return ""
+}
+
+func (us *UploadStats) LastFileOperation() FileOperation {
+	if fp, ok := us.lastPath.Load().(*filePair); ok {
+		switch {
+		case fp.src != nil && fp.dest != nil:
+			return Keep
+		case fp.src != nil:
+			return Create
+		case fp.dest != nil:
+			return Remove
+		}
+	}
+	return UnknownFileOperation
 }
