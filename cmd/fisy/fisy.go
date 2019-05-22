@@ -38,7 +38,12 @@ func main() {
 	flag.Parse()
 
 	if flag.NArg() == 1 {
-		cmd := exec.Command(os.ExpandEnv("$HOME/.config/fisy/") + flag.Arg(0) + ".alias")
+		var flags []string
+		flag.Visit(func(f *flag.Flag) {
+			flags = append(flags, "-"+f.Name+"="+f.Value.String())
+		})
+		cmd := exec.Command(os.ExpandEnv("$HOME/.config/fisy/")+flag.Arg(0)+".alias", flags...)
+		cmd.Env = append([]string{"FISY=" + os.Args[0]}, os.Environ()...)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
