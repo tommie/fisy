@@ -103,7 +103,7 @@ func (fs *SFTPFileSystem) Mkdir(path Path, mode os.FileMode, uid, gid int) error
 func (fs *SFTPFileSystem) Link(oldpath Path, newpath Path) error {
 	oldp, newp := string(fs.root.Resolve(oldpath)), string(fs.root.Resolve(newpath))
 	if err := fs.client.Link(oldp, newp); err != nil {
-		return &os.PathError{Op: "sftp:link", Path: oldp + " " + newp, Err: err}
+		return &os.LinkError{Op: "sftp:link", Old: oldp, New: newp, Err: err}
 	}
 	return nil
 }
@@ -111,7 +111,7 @@ func (fs *SFTPFileSystem) Link(oldpath Path, newpath Path) error {
 func (fs *SFTPFileSystem) Symlink(oldpath Path, newpath Path) error {
 	oldp, newp := string(oldpath), string(fs.root.Resolve(newpath))
 	if err := fs.client.Symlink(oldp, newp); err != nil {
-		return &os.PathError{Op: "sftp:symlink", Path: oldp + " " + newp, Err: err}
+		return &os.LinkError{Op: "sftp:symlink", Old: oldp, New: newp, Err: err}
 	}
 	return nil
 }
@@ -119,7 +119,7 @@ func (fs *SFTPFileSystem) Symlink(oldpath Path, newpath Path) error {
 func (fs *SFTPFileSystem) Rename(oldpath Path, newpath Path) error {
 	oldp, newp := string(fs.root.Resolve(oldpath)), string(fs.root.Resolve(newpath))
 	if err := fs.client.PosixRename(oldp, newp); err != nil {
-		return &os.PathError{Op: "sftp:rename", Path: oldp + " " + newp, Err: err}
+		return &os.LinkError{Op: "sftp:rename", Old: oldp, New: newp, Err: err}
 	}
 	return nil
 }

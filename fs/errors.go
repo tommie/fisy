@@ -13,6 +13,9 @@ func IsExist(err error) bool {
 	if e, ok := err.(*os.PathError); ok {
 		err = e.Err
 	}
+	if e, ok := err.(*os.LinkError); ok {
+		err = e.Err
+	}
 	if e, ok := err.(*sftp.StatusError); ok {
 		return e.Code == 11 // sftp.ssh_FX_FILE_ALREADY_EXISTS
 	}
@@ -26,6 +29,9 @@ func IsNotExist(err error) bool {
 	if e, ok := err.(*os.PathError); ok {
 		err = e.Err
 	}
+	if e, ok := err.(*os.LinkError); ok {
+		err = e.Err
+	}
 	if e, ok := err.(*sftp.StatusError); ok {
 		return e.Code == 2 // sftp.ssh_FX_NO_SUCH_FILE
 	}
@@ -37,6 +43,9 @@ func IsPermission(err error) bool {
 		return true
 	}
 	if e, ok := err.(*os.PathError); ok {
+		err = e.Err
+	}
+	if e, ok := err.(*os.LinkError); ok {
 		err = e.Err
 	}
 	if e, ok := err.(*sftp.StatusError); ok {
