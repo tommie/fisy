@@ -240,7 +240,7 @@ func readdir(fs fs.ReadableFileSystem, path fs.Path) ([]os.FileInfo, error) {
 }
 
 func (u *Upload) transfer(fp *filePair) (err error) {
-	u.stats.lastPath.Store(string(fp.path))
+	u.stats.lastPath.Store(fp)
 
 	if fp.src == nil {
 		if fp.dest.IsDir() {
@@ -456,12 +456,12 @@ type UploadStats struct {
 	IgnoredFiles uint64
 	IgnoredDirectories uint64
 
-	lastPath *atomic.Value // string
+	lastPath *atomic.Value // *filePath
 }
 
 func (us *UploadStats) LastPath() string {
-	if s, ok := us.lastPath.Load().(string); ok {
-		return s
+	if fp, ok := us.lastPath.Load().(*filePair); ok {
+		return string(fp.path)
 	}
 	return ""
 }
