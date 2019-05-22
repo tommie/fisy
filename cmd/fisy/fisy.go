@@ -250,42 +250,67 @@ func makeFileSystemFromURL(u *url.URL) (fs.WriteableFileSystem, func(error) erro
 }
 
 func newSFTPFileSystem(host, path string) (fs.WriteableFileSystem, func() error, error) {
-	hkcb, err := knownhosts.New(os.ExpandEnv("$HOME/.ssh/known_hosts"))
-	if err != nil {
-		return nil, nil, err
-	}
-	agentConn, err := net.Dial("unix", os.Getenv("SSH_AUTH_SOCK"))
-	if err != nil {
-		return nil, nil, err
-	}
-	cfg := ssh.ClientConfig{
-		User: os.Getenv("LOGNAME"),
-		Auth: []ssh.AuthMethod{
-			ssh.PublicKeysCallback(agent.NewClient(agentConn).Signers),
-		},
-		HostKeyCallback: hkcb,
-		Timeout:         30 * time.Second,
+	dial := func() (fs.RetryableSFTPClient, error) {
+		hkcb, err := knownhosts.New(os.ExpandEnv("$HOME/.ssh/known_hosts"))
+		if err != nil {
+			return nil, err
+		}
+		agentConn, err := net.Dial("unix", os.Getenv("SSH_AUTH_SOCK"))
+		if err != nil {
+			return nil, err
+		}
+		cfg := ssh.ClientConfig{
+			User: os.Getenv("LOGNAME"),
+			Auth: []ssh.AuthMethod{
+				ssh.PublicKeysCallback(agent.NewClient(agentConn).Signers),
+			},
+			HostKeyCallback: hkcb,
+			Timeout:         30 * time.Second,
+		}
+
+		sc, err := ssh.Dial("tcp", host, &cfg)
+		if err != nil {
+			return nil, err
+		}
+
+		sftpc, err := sftp.NewClient(sc)
+		if err != nil {
+			return nil, err
+		}
+
+		return &connectedSFTPClient{
+			Client: sftpc,
+			closers: []func() error{
+				sc.Close,
+				agentConn.Close,
+			},
+		}, nil
 	}
 
-	sc, err := ssh.Dial("tcp", host, &cfg)
+	sftpc, err := fs.NewRetryingSFTPClient(dial, 12*time.Hour)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	sftpc, err := sftp.NewClient(sc)
-	if err != nil {
-		return nil, nil, err
-	}
+	return fs.NewSFTPFileSystem(sftpc, fs.Path(path)), sftpc.Close, nil
+}
 
-	return fs.NewSFTPFileSystem(sftpc, fs.Path(path)), func() error {
-		if err := sftpc.Close(); err != nil {
+type connectedSFTPClient struct {
+	*sftp.Client
+
+	closers []func() error
+}
+
+func (c connectedSFTPClient) Close() error {
+	if err := c.Client.Close(); err != nil {
+		return err
+	}
+	for _, fun := range c.closers {
+		if err := fun(); err != nil {
 			return err
 		}
-		if err := sc.Close(); err != nil {
-			return err
-		}
-		return agentConn.Close()
-	}, nil
+	}
+	return nil
 }
 
 func parseIgnoreFilter(lines string) (func(fs.Path) bool, error) {
