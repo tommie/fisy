@@ -286,7 +286,12 @@ func (u *Upload) transferFile(fp *filePair) error {
 	if fp.src.Mode()&os.ModeSymlink != 0 {
 		// We should symlink.
 		linkdest, err := u.src.Readlink(fp.path)
-		if err != nil {
+		if fs.IsNotExist(err) {
+			// The symlink was removed between listing and transferring.
+			u.srcLinks.Discard(fp)
+			atomic.AddUint64(&u.stats.DiscardedFiles, 1)
+			return nil
+		} else if err != nil {
 			return err
 		}
 		glog.V(1).Infof("Symlinking %q to %q...", fp.path, linkdest)
@@ -296,7 +301,12 @@ func (u *Upload) transferFile(fp *filePair) error {
 	}
 
 	sf, err := u.src.Open(fp.path)
-	if err != nil {
+	if fs.IsNotExist(err) {
+		// The symlink was removed between listing and transferring.
+		u.srcLinks.Discard(fp)
+		atomic.AddUint64(&u.stats.DiscardedFiles, 1)
+		return nil
+	} else if err != nil {
 		return err
 	}
 	defer sf.Close()
@@ -430,6 +440,8 @@ func (u *Upload) Stats() UploadStats {
 		IgnoredFiles:       atomic.LoadUint64(&u.stats.IgnoredFiles),
 		IgnoredDirectories: atomic.LoadUint64(&u.stats.IgnoredDirectories),
 
+		DiscardedFiles:       atomic.LoadUint64(&u.stats.DiscardedFiles),
+
 		lastPath: u.stats.lastPath,
 	}
 }
@@ -457,6 +469,8 @@ type UploadStats struct {
 
 	IgnoredFiles       uint64
 	IgnoredDirectories uint64
+
+	DiscardedFiles       uint64
 
 	lastPath *atomic.Value // *filePath
 }

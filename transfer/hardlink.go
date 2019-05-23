@@ -42,7 +42,6 @@ func (set *linkSet) Offer(fp *filePair) {
 
 	if _, ok := set.inodes[st.Ino]; !ok {
 		set.inodes[st.Ino] = &inodeInfo{
-			path:  fp.path,
 			nlink: int(st.Nlink),
 		}
 	}
@@ -65,20 +64,31 @@ func (set *linkSet) Fulfill(fp *filePair) {
 	set.c.Broadcast()
 }
 
+func (set *linkSet) Discard(fp *filePair) {
+	set.c.L.Lock()
+	defer set.c.L.Unlock()
+
+	if set.inodes[fp.linkToInode].path == fp.path {
+		set.inodes[fp.linkToInode].path = ""
+	}
+	set.c.Broadcast()
+}
+
 func (set *linkSet) FinishedLinkPath(fp *filePair) fs.Path {
 	set.c.L.Lock()
 	defer set.c.L.Unlock()
 
-	firstPath := set.inodes[fp.linkToInode].path
-	if firstPath == fp.path {
-		return ""
-	}
-
-	// We should hardlink. It is safe to block here since we know
-	// firstPath was transferred before us.
 	for !set.inodes[fp.linkToInode].uploaded {
+		if set.inodes[fp.linkToInode].path == "" {
+			// We are the first one here, or the previous
+			// file was discarded.
+			set.inodes[fp.linkToInode].path = fp.path
+			return ""
+		}
 		set.c.Wait()
 	}
+
+	firstPath := set.inodes[fp.linkToInode].path
 
 	set.inodes[fp.linkToInode].nlink--
 	if set.inodes[fp.linkToInode].nlink == 0 {
