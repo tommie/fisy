@@ -204,7 +204,7 @@ func readdir(fs fs.ReadableFileSystem, path fs.Path) ([]os.FileInfo, error) {
 	return fr.Readdir()
 }
 
-func (u *Upload) transfer(fp *filePair) (err error) {
+func (u *Upload) transfer(fp *filePair) error {
 	u.stats.lastPath.Store(fp)
 
 	fi := fp.src
@@ -219,12 +219,22 @@ func (u *Upload) transfer(fp *filePair) (err error) {
 	return u.transferFile(fp)
 }
 
-func (u *Upload) transferFile(fp *filePair) (err error) {
+func (u *Upload) transferFile(fp *filePair) error {
 	if fp.src == nil {
 		// Removed file.
 		glog.V(1).Infof("Removing file %q...", fp.path)
 		atomic.AddUint64(&u.stats.RemovedFiles, 1)
 		return u.dest.Remove(fp.path)
+	}
+
+	if fp.linkToInode != 0 {
+		if firstPath := u.srcLinks.FinishedLinkPath(fp); firstPath != "" {
+			glog.V(1).Infof("Hard-linking file %q to %q...", fp.path, firstPath)
+			atomic.AddUint64(&u.stats.UploadedFiles, 1)
+			return u.dest.Link(firstPath, fp.path)
+		}
+
+		defer u.srcLinks.Fulfill(fp)
 	}
 
 	if fp.dest != nil && !needsTransfer(fp.dest, fp.src) {
@@ -238,16 +248,6 @@ func (u *Upload) transferFile(fp *filePair) (err error) {
 		}
 
 		// Fall back to normal transfer.
-	}
-
-	if fp.linkToInode != 0 {
-		if firstPath := u.srcLinks.FinishedLinkPath(fp); firstPath != "" {
-			glog.V(1).Infof("Hard-linking file %q to %q...", fp.path, firstPath)
-			atomic.AddUint64(&u.stats.UploadedFiles, 1)
-			return u.dest.Link(firstPath, fp.path)
-		}
-
-		defer u.srcLinks.Fulfill(fp)
 	}
 
 	if fp.src.Mode()&os.ModeSymlink != 0 {
@@ -315,7 +315,7 @@ func (u *Upload) transferFile(fp *filePair) (err error) {
 	return nil
 }
 
-func (u *Upload) transferDirectory(fp *filePair) (err error) {
+func (u *Upload) transferDirectory(fp *filePair) error {
 	if fp.src == nil {
 		// Removed directory.
 		glog.V(1).Infof("Removing directory %q...", fp.path)
