@@ -43,9 +43,14 @@ type filePair struct {
 	linkToInode uint64
 }
 
-func NewUpload(dest fs.WriteableFileSystem, src fs.ReadableFileSystem, opts ...UploadOpt) *Upload {
-	const conc = 128
+func (fp *filePair) FileInfo() os.FileInfo {
+	if fp.src != nil {
+		return fp.src
+	}
+	return fp.dest
+}
 
+func NewUpload(dest fs.WriteableFileSystem, src fs.ReadableFileSystem, opts ...UploadOpt) *Upload {
 	u := &Upload{
 		src:          src,
 		dest:         dest,
@@ -112,7 +117,7 @@ func (u *Upload) process(ctx context.Context, fp *filePair) ([]*filePair, error)
 		}
 	}
 
-	isDir := fp.src != nil && fp.src.IsDir() || fp.dest != nil && fp.dest.IsDir()
+	isDir := fp.FileInfo().IsDir()
 	filterPath := "/" + fp.path
 	if isDir {
 		filterPath += "/"
@@ -206,6 +211,19 @@ func (u *Upload) listDir(path fs.Path) ([]*filePair, error) {
 		fps = append(fps, &filePair{path: path.Resolve(fs.Path(f.Name())), dest: f})
 	}
 
+	// To reduce memory footprint, we want to work on files first,
+	// since directories may add more in-memory data. Later files
+	// in fps will be worked on earlier.
+	sort.Slice(fps, func(i, j int) bool {
+		idir := fps[i].FileInfo().IsDir()
+		jdir := fps[j].FileInfo().IsDir()
+		if idir != jdir {
+			// If i is a directory, then it is "less".
+			return idir
+		}
+		return fps[i].path < fps[j].path
+	})
+
 	for _, fp := range fps {
 		// Allow hardlinks if possible.
 		u.srcLinks.Offer(fp)
@@ -227,12 +245,7 @@ func readdir(fs fs.ReadableFileSystem, path fs.Path) ([]os.FileInfo, error) {
 func (u *Upload) transfer(fp *filePair) error {
 	u.stats.lastPath.Store(fp)
 
-	fi := fp.src
-	if fi == nil {
-		fi = fp.dest
-	}
-
-	if fi.IsDir() {
+	if fp.FileInfo().IsDir() {
 		return u.transferDirectory(fp)
 	}
 
