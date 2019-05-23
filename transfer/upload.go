@@ -80,6 +80,14 @@ func (u *Upload) Run(ctx context.Context) error {
 }
 
 func (u *Upload) process(ctx context.Context, fp *filePair) ([]*filePair, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+
+	default:
+		// Continue.
+	}
+
 	atomic.AddUint32(&u.stats.InProgress, 1)
 	defer atomic.AddUint32(&u.stats.InProgress, ^uint32(0))
 
