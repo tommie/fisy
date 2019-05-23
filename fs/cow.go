@@ -60,7 +60,7 @@ func (fs *cowFileSystem) Mkdir(path Path, mode os.FileMode, uid, gid int) error 
 }
 
 func (fs *cowFileSystem) Link(oldpath Path, newpath Path) error {
-	return fs.fs.Link(fs.rroot.Resolve(oldpath), fs.wroot.Resolve(newpath))
+	return fs.fs.Link(fs.wroot.Resolve(oldpath), fs.wroot.Resolve(newpath))
 }
 
 func (fs *cowFileSystem) Symlink(oldpath Path, newpath Path) error {
