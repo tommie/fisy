@@ -18,6 +18,7 @@ import (
 )
 
 var (
+	fileConc   = flag.Int("file-concurrency", 128, "number of files/directories to work on concurrently")
 	httpAddr   = flag.String("http-addr", "", "address to listen for HTTP requests on")
 	ignoreSpec = flag.String("ignore", "", "filter to apply to ignore some files")
 )
@@ -111,7 +112,7 @@ func runUpload(ctx context.Context, srcSpec, destSpec, ignoreSpec string) (rerr 
 	}()
 
 	start := time.Now()
-	u := transfer.NewUpload(dest, src, transfer.WithIgnoreFilter(filter))
+	u := transfer.NewUpload(dest, src, transfer.WithIgnoreFilter(filter), transfer.WithConcurrency(*fileConc))
 
 	go RunProgress(ctx, u)
 

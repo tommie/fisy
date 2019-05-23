@@ -29,6 +29,7 @@ type Upload struct {
 	src          fs.ReadableFileSystem
 	dest         fs.WriteableFileSystem
 	ignoreFilter func(fs.Path) bool
+	nconc        int
 
 	srcLinks linkSet
 
@@ -49,6 +50,7 @@ func NewUpload(dest fs.WriteableFileSystem, src fs.ReadableFileSystem, opts ...U
 		src:          src,
 		dest:         dest,
 		ignoreFilter: func(fs.Path) bool { return false },
+		nconc:        1,
 
 		srcLinks: newLinkSet(),
 
@@ -70,13 +72,23 @@ func WithIgnoreFilter(fun func(fs.Path) bool) UploadOpt {
 	}
 }
 
+func WithConcurrency(nconc int) UploadOpt {
+	if nconc < 1 {
+		glog.Fatalf("nconc must be at least 1")
+	}
+
+	return func(u *Upload) {
+		u.nconc = nconc
+	}
+}
+
 func (u *Upload) Run(ctx context.Context) error {
 	fps, err := u.listDir(fs.Path("."))
 	if err != nil {
 		return err
 	}
 
-	return filePairPDFS(ctx, fps, u.process, 128)
+	return filePairPDFS(ctx, fps, u.process, u.nconc)
 }
 
 func (u *Upload) process(ctx context.Context, fp *filePair) ([]*filePair, error) {
