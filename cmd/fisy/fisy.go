@@ -158,32 +158,32 @@ func runUpload(ctx context.Context, srcSpec, destSpec, ignoreSpec string) (rerr 
 
 func showStats(u *transfer.Upload, maxLength int) {
 	st := u.Stats()
-	s := fmt.Sprintf("\033[2K%5d / %7v / %d / %d: %c %s\033[1G", st.SourceFiles, storageBytes(st.UploadedBytes), st.InProgress, st.InodeTable, st.LastFileOperation(), st.LastPath())
+	s := fmt.Sprintf("\033[2K%5d / %7s / %d / %d: %c %s\033[1G", st.SourceFiles, deltaStorageBytes(st.UploadedBytes), st.InProgress, st.InodeTable, st.LastFileOperation(), st.LastPath())
 	if len(s) > maxLength {
 		s = s[:maxLength]
 	}
 	fmt.Print(s)
 }
 
-type storageBytes uint64
+type deltaStorageBytes uint64
 
 var storageBytesUnits = []string{
 	"B", "kiB", "MiB", "GiB", "PiB",
 }
 
-func (v storageBytes) String() string {
+func (v deltaStorageBytes) String() string {
 	f := float64(v)
 	for _, unit := range storageBytesUnits {
 		if f == 0 {
-			return fmt.Sprintf("%.0f %s", f, unit)
+			return fmt.Sprintf("%+.0f %s", f, unit)
 		} else if f < 16 {
-			return fmt.Sprintf("%.1f %s", f, unit)
+			return fmt.Sprintf("%+.1f %s", f, unit)
 		} else if f < 512 {
-			return fmt.Sprintf("%.0f %s", f, unit)
+			return fmt.Sprintf("%+.0f %s", f, unit)
 		}
 		f /= 1024
 	}
-	return fmt.Sprintf("%.0f EiB", f)
+	return fmt.Sprintf("%+.0f EiB", f)
 }
 
 func makeFileSystem(s string) (fs.WriteableFileSystem, func(error) error, error) {
