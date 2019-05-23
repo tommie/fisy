@@ -117,7 +117,12 @@ func (u *Upload) process(ctx context.Context, fp *filePair) ([]*filePair, error)
 		})
 	}
 	eg.Go(func() error {
-		return u.transfer(fp)
+		err := u.transfer(fp)
+		if err != nil {
+			glog.Errorf("Failed to transfer %q: %v", fp.path, err)
+			glog.V(1).Infof("Source: %+v\nDestination: %+v", fp.src, fp.dest)
+		}
+		return err
 	})
 	return fps, eg.Wait()
 }
