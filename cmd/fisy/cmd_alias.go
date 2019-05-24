@@ -32,8 +32,8 @@ func runAnAlias(c *cobra.Command, args []string) error {
 	name := c.Name()
 
 	var flags []string
-	pflag.Visit(func(f *pflag.Flag) {
-		flags = append(flags, "-"+f.Name+"="+f.Value.String())
+	c.Flags().Visit(func(f *pflag.Flag) {
+		flags = append(flags, "--"+f.Name+"="+f.Value.String())
 	})
 	executable, err := os.Executable()
 	if err != nil {
