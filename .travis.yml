@@ -1,0 +1,7 @@
+language: go
+
+go:
+  - 1.11.x
+  - master
+
+script: go build -o fisy ${gobuild_args} cmd/fisy/*.go
