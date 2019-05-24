@@ -9,9 +9,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/golang/glog"
@@ -67,50 +65,12 @@ var rootCmd = cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
 
-		if len(args) == 1 {
-			return runAlias(args[0])
-		}
 		if len(args) != 2 {
 			return fmt.Errorf("expected two arguments")
 		}
 
 		return runUpload(ctx, cmd, args[0], args[1])
 	},
-}
-
-func runAlias(name string) error {
-	var flags []string
-	pflag.Visit(func(f *pflag.Flag) {
-		flags = append(flags, "-"+f.Name+"="+f.Value.String())
-	})
-	executable, err := os.Executable()
-	if err != nil {
-		glog.Warningf("Couldn't get executable: %v", err)
-		executable = os.Args[0]
-	}
-	path := os.ExpandEnv("$HOME/.config/fisy/") + name + ".alias"
-	env := append([]string{"FISY=" + executable}, os.Environ()...)
-
-	// First attempt to replace the process, to avoid glog writing a log here.
-	syscall.Exec(path, append([]string{name + ".alias"}, flags...), env)
-
-	// If that doesn't work: fork and exec.
-	cmd := exec.Command(path, flags...)
-	cmd.Env = env
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err = cmd.Run()
-	if err == nil {
-		return nil
-	}
-	if e, ok := err.(*exec.ExitError); ok {
-		if ee, ok := e.Sys().(*syscall.WaitStatus); ok {
-			return &ExitError{Code: ee.ExitStatus(), Err: e}
-		}
-	}
-
-	return err
 }
 
 func runUpload(ctx context.Context, cmd *cobra.Command, srcSpec, destSpec string) (rerr error) {
