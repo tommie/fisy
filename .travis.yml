@@ -8,10 +8,10 @@ before_install:
   - sed -i 's/git@github.com:/https:\/\/github.com\//' .gitmodules
   - git submodule update --init --recursive
 
-install: make configure
+install: make GOBUILDFLAGS="${gobuild_args}" configure
 
 go:
   - 1.11.x
   - master
 
-script: make check all
+script: make GOBUILDFLAGS="${gobuild_args}" check all

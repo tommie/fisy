@@ -2,6 +2,9 @@ BASH ?= bash
 GO ?= go
 RM ?= rm
 
+GOBUILDFLAGS ?=
+GOTESTFLAGS ?=
+
 GENERATE_SOURCES = $(wildcard cmd/fisy/*.go)
 
 fisy_SOURCES = $(wildcard cmd/fisy/*.go)
@@ -9,11 +12,11 @@ fisy_SOURCES = $(wildcard cmd/fisy/*.go)
 .PHONY: all
 all: go-generate
 	[ -e bin ] || mkdir -p bin
-	$(GO) build -o bin/fisy $(fisy_SOURCES)
+	$(GO) build $(GOBUILDFLAGS) -o bin/fisy $(fisy_SOURCES)
 
 .PHONY: configure
 configure: go-generate
-	$(GO) get ./...
+	$(GO) get $(GOBUILDFLAGS) ./...
 
 .PHONY: clean
 clean:
@@ -21,8 +24,8 @@ clean:
 
 .PHONY: check
 check:
-	$(GO) test ./...
+	$(GO) test $(GOBUILDFLAGS) $(GOTESTFLAGS) ./...
 
 .PHONY: go-generate
 go-generate:
-	$(GO) generate $(GENERATE_SOURCES)
+	$(GO) generate $(GOBUILDFLAGS) $(GENERATE_SOURCES)

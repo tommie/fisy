@@ -3,6 +3,7 @@ package fs
 import (
 	"os"
 	"strings"
+	"syscall"
 )
 
 type memDirEnt struct {
@@ -12,23 +13,29 @@ type memDirEnt struct {
 	Children []*memDirEnt
 }
 
+var testUmask = func() os.FileMode {
+	umask := os.FileMode(syscall.Umask(0))
+	syscall.Umask(int(umask))
+	return umask
+}()
+
 func testTree() []*memDirEnt {
 	return []*memDirEnt{
-		{"dir1", 0755 | os.ModeDir, "", []*memDirEnt{
-			{"dir-empty", 0755 | os.ModeDir, "", []*memDirEnt{}},
+		{"dir1", 0777 | os.ModeDir, "", []*memDirEnt{
+			{"dir-empty", 0777 | os.ModeDir, "", []*memDirEnt{}},
 			{"file-readonly", 0444, "content readonly\n", nil},
 		}},
 		{"dir-readonly", 0555 | os.ModeDir, "", []*memDirEnt{
 			{"file-private", 0600, "content private\n", nil},
 		}},
 		{"dir-private", 0700 | os.ModeDir, "", []*memDirEnt{
-			{"file2", 0644, "content 2\n", nil},
+			{"file2", 0666, "content 2\n", nil},
 		}},
-		{"file1", 0644, "content 1\n", nil},
+		{"file1", 0666, "content 1\n", nil},
 		{"file-noperms", 0000, "content noperms\n", nil},
 		{"symlink1", 0777 | os.ModeSymlink, "file1", nil},
 		{"symlink-dangling", 0777 | os.ModeSymlink, "nothing", nil},
-		{"hardlink1", 0644, "file1", nil},
+		{"hardlink1", 0666, "file1", nil},
 		{"hardlink-symlink", 0777 | os.ModeSymlink, "symlink1", nil},
 	}
 }

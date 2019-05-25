@@ -168,7 +168,7 @@ func TestLocalCreate(t *testing.T) {
 
 	tree := append(testTree(), &memDirEnt{
 		Name:    "file-create",
-		Mode:    0644,
+		Mode:    0666 &^ testUmask,
 		Content: "",
 	})
 
@@ -191,7 +191,7 @@ func TestLocalCreateCanOverwrite(t *testing.T) {
 	}
 
 	tree := testTree()
-	findMemDirEnt(tree, "file-noperms").Mode = 0644
+	findMemDirEnt(tree, "file-noperms").Mode = 0666 &^ testUmask
 	findMemDirEnt(tree, "file-noperms").Content = ""
 
 	if err := checkTestLocal(lfs, tree); err != nil {
@@ -216,7 +216,7 @@ func TestLocalFileWriter(t *testing.T) {
 
 	tree := append(testTree(), &memDirEnt{
 		Name:    "file-create",
-		Mode:    0644,
+		Mode:    0666 &^ testUmask,
 		Content: "content create\n",
 	})
 
@@ -284,7 +284,7 @@ func TestLocalLink(t *testing.T) {
 
 	tree := append(testTree(), &memDirEnt{
 		Name:    "hardlink-file1",
-		Mode:    0644,
+		Mode:    0666,
 		Content: "file1",
 	})
 
