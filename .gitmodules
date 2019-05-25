@@ -1,0 +1,4 @@
+[submodule "github.com/pkg/sftp"]
+	path = vendor/github.com/pkg/sftp
+	url = git@github.com:tommie/sftp
+	branch = hardlink
