@@ -7,10 +7,14 @@ GENERATE_SOURCES = $(wildcard cmd/fisy/*.go)
 fisy_SOURCES = $(wildcard cmd/fisy/*.go)
 
 .PHONY: all
-all: cmd/fisy/version.go
+all:
 	[ -e bin ] || mkdir -p bin
 	$(GO) generate $(GENERATE_SOURCES)
 	$(GO) build -o bin/fisy $(fisy_SOURCES)
+
+.PHONY: configure
+configure:
+	$(GO) get ./...
 
 .PHONY: clean
 clean:
@@ -18,4 +22,4 @@ clean:
 
 .PHONY: check
 check:
-	$(GO) test github.com/tommie/fisy/fs
+	$(GO) test ./...
