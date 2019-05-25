@@ -109,7 +109,7 @@ func (c *RetryingSFTPClient) doIdempotent(fun func(SFTPClient) error) error {
 			return err
 		}
 
-		glog.Warning("Got retriable error (backoff %v, timeout %v): %v", delay, c.timeout, err)
+		glog.Warningf("Got retriable error (backoff %v, timeout %v): %v", delay, c.timeout, err)
 		<-time.After(delay)
 
 		delay *= 2
