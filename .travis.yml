@@ -3,5 +3,3 @@ language: go
 go:
   - 1.11.x
   - master
-
-script: go generate -v -x cmd/fisy/*.go && go build -o fisy ${gobuild_args} cmd/fisy/*.go
