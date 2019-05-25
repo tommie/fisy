@@ -2,19 +2,29 @@ package fs
 
 import (
 	"os"
-	"time"
 	"syscall"
+	"time"
 )
 
-type LocalFileSystem struct {
+// Test mock injection points.
+var (
+	syscallStatfs = syscall.Statfs
+	osLchown      = os.Lchown
+)
+
+// Local is a file system working on the OS native file system.
+type Local struct {
 	root Path
 }
 
-func NewLocalFileSystem(root string) *LocalFileSystem {
-	return &LocalFileSystem{root: Path(root)}
+// NewLocal constructs a new object to access the OS native file
+// system.
+func NewLocal(root string) *Local {
+	return &Local{root: Path(root)}
 }
 
-func (fs *LocalFileSystem) Open(path Path) (FileReader, error) {
+// Open opens a file or directory for reading.
+func (fs *Local) Open(path Path) (FileReader, error) {
 	f, err := os.Open(string(fs.root.Resolve(path)))
 	if err != nil {
 		return nil, err
@@ -26,16 +36,28 @@ type localFileReader struct {
 	*os.File
 }
 
+// Readdir returns all directory entries, if the file represents a directory.
 func (fr *localFileReader) Readdir() ([]os.FileInfo, error) {
 	return fr.File.Readdir(0)
 }
 
-func (fs *LocalFileSystem) Readlink(path Path) (Path, error) {
+// Readlink returns the contents of the given symlink.
+func (fs *Local) Readlink(path Path) (Path, error) {
 	p, err := os.Readlink(string(fs.root.Resolve(path)))
 	return Path(p), err
 }
 
-func (fs *LocalFileSystem) Create(path Path) (FileWriter, error) {
+// Stat returns information about this file system.
+func (fs *Local) Stat() (FSInfo, error) {
+	var sf syscall.Statfs_t
+	if err := syscallStatfs(string(fs.root), &sf); err != nil {
+		return FSInfo{}, err
+	}
+	return FSInfo{FreeSpace: uint64(sf.Frsize) * sf.Bavail}, nil
+}
+
+// Create creates (or overwrites) a file and opens it for writing.
+func (fs *Local) Create(path Path) (FileWriter, error) {
 	p := string(fs.root.Resolve(path))
 	f, err := os.Create(p)
 	if IsPermission(err) {
@@ -54,11 +76,13 @@ type localFileWriter struct {
 	*os.File
 }
 
-func (fs *LocalFileSystem) Keep(path Path) error {
+// Keep informs the file system that the file should be kept. This does nothing.
+func (fs *Local) Keep(path Path) error {
 	return nil
 }
 
-func (fs *LocalFileSystem) Mkdir(path Path, mode os.FileMode, uid, gid int) error {
+// Mkdir creates a new directory. If uid or gid are -1, that value is ignored.
+func (fs *Local) Mkdir(path Path, mode os.FileMode, uid, gid int) error {
 	p := string(fs.root.Resolve(path))
 	if err := os.Mkdir(p, mode); err != nil {
 		return err
@@ -70,42 +94,43 @@ func (fs *LocalFileSystem) Mkdir(path Path, mode os.FileMode, uid, gid int) erro
 	return nil
 }
 
-func (fs *LocalFileSystem) Link(oldpath Path, newpath Path) error {
+// Link creates a hardlink to an existing file.
+func (fs *Local) Link(oldpath Path, newpath Path) error {
 	return os.Link(string(fs.root.Resolve(oldpath)), string(fs.root.Resolve(newpath)))
 }
 
-func (fs *LocalFileSystem) Symlink(oldpath Path, newpath Path) error {
+// Symlink creates a symlink pointing to a file or directory.
+func (fs *Local) Symlink(oldpath Path, newpath Path) error {
 	return os.Symlink(string(oldpath), string(fs.root.Resolve(newpath)))
 }
 
-func (fs *LocalFileSystem) Rename(oldpath Path, newpath Path) error {
+// Rename moves a file or directory from one path to another.
+func (fs *Local) Rename(oldpath Path, newpath Path) error {
 	return os.Rename(string(fs.root.Resolve(oldpath)), string(fs.root.Resolve(newpath)))
 }
 
-func (fs *LocalFileSystem) RemoveAll(path Path) error {
+// RemoveAll recursively deletes a directory (or file).
+func (fs *Local) RemoveAll(path Path) error {
 	return os.RemoveAll(string(fs.root.Resolve(path)))
 }
 
-func (fs *LocalFileSystem) Remove(path Path) error {
+// Remove deletes a file or empty directory.
+func (fs *Local) Remove(path Path) error {
 	return os.Remove(string(fs.root.Resolve(path)))
 }
 
-func (fs *LocalFileSystem) Stat() (FSInfo, error) {
-	var sf syscall.Statfs_t
-	if err := syscall.Statfs(string(fs.root), &sf); err != nil {
-		return FSInfo{}, err
-	}
-	return FSInfo{FreeSpace: uint64(sf.Frsize) * sf.Bavail}, nil
-}
-
-func (fs *LocalFileSystem) Chmod(path Path, mode os.FileMode) error {
+// Chmod changes file or directory modes and permissions.
+func (fs *Local) Chmod(path Path, mode os.FileMode) error {
 	return os.Chmod(string(fs.root.Resolve(path)), mode)
 }
 
-func (fs *LocalFileSystem) Lchown(path Path, uid, gid int) error {
-	return os.Lchown(string(fs.root.Resolve(path)), uid, gid)
+// Lchown changes the owner or group of a file or directory.
+// If uid or gid are -1, that value is ignored. Symlinks are updated, not followed.
+func (fs *Local) Lchown(path Path, uid, gid int) error {
+	return osLchown(string(fs.root.Resolve(path)), uid, gid)
 }
 
-func (fs *LocalFileSystem) Chtimes(path Path, atime time.Time, mtime time.Time) error {
+// Chtimes modifies the file or directory metadata for access and modification times.
+func (fs *Local) Chtimes(path Path, atime time.Time, mtime time.Time) error {
 	return os.Chtimes(string(fs.root.Resolve(path)), atime, mtime)
 }

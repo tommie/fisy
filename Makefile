@@ -15,3 +15,7 @@ all: cmd/fisy/version.go
 .PHONY: clean
 clean:
 	$(RM) -r bin
+
+.PHONY: check
+check:
+	$(GO) test github.com/tommie/fisy/fs

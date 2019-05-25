@@ -62,7 +62,7 @@ func makeFileSystemFromURL(u *url.URL) (fs.WriteableFileSystem, func(error) erro
 
 	switch u.Scheme {
 	case "file":
-		return fs.NewLocalFileSystem(u.Path), func(error) error { return nil }, nil
+		return fs.NewLocal(u.Path), func(error) error { return nil }, nil
 
 	case "sftp":
 		host := u.Host
