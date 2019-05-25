@@ -1,5 +1,9 @@
 language: go
 
+go:
+  - 1.11.x
+  - master
+
 # From https://gist.github.com/petrbel/c3bf7e0f59c22a52f534
 git:
   submodules: false
@@ -8,10 +12,11 @@ before_install:
   - sed -i 's/git@github.com:/https:\/\/github.com\//' .gitmodules
   - git submodule update --init --recursive
 
-install: make GOBUILDFLAGS="${gobuild_args}" configure
+install:
+  - make GOBUILDFLAGS="${gobuild_args}" configure
+  - curl -sS -o codecov.sh https://codecov.io/bash
 
-go:
-  - 1.11.x
-  - master
+script: make GOBUILDFLAGS="${gobuild_args}" GOTESTFLAGS="-race -coverprofile=coverage.txt -covermode=atomic" check all
 
-script: make GOBUILDFLAGS="${gobuild_args}" check all
+after_success:
+  - bash codecov.sh
