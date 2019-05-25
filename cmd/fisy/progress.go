@@ -12,7 +12,12 @@ import (
 )
 
 func RunProgress(ctx context.Context, u *transfer.Upload) {
-	tw, _, err := terminal.GetSize(int(os.Stdout.Fd()))
+	fd := int(os.Stdout.Fd())
+	if !terminal.IsTerminal(fd) {
+		return
+	}
+
+	tw, _, err := terminal.GetSize(fd)
 	if err != nil {
 		tw = 80
 		glog.Warningf("couldn't get terminal size (defaulting to %v): %v", tw, err)

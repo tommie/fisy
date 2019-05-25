@@ -63,6 +63,7 @@ func runTransfer(ctx context.Context, cmd *cobra.Command, srcSpec, destSpec stri
 	go RunProgress(ctx, u)
 
 	if err := u.Run(ctx); err != nil {
+		cancel()
 		return err
 	}
 	cancel()
