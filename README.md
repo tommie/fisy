@@ -2,6 +2,7 @@
 
 [![Build Status](https://travis-ci.org/tommie/fisy.svg?branch=master)](https://travis-ci.org/tommie/fisy)
 [![GoDoc](https://godoc.org/github.com/tommie/fisy?status.svg)](https://godoc.org/github.com/tommie/fisy)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Fisy is a bidirectional file synchronizer for multiple hosts sharing a
 single server. It can be used as a "private cloud" while allowing you
