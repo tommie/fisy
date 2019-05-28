@@ -6,16 +6,17 @@ import (
 	"time"
 
 	"github.com/pkg/sftp"
+	"github.com/tommie/fisy/remote"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 )
 
 type SFTPFileSystem struct {
-	client SFTPClient
+	client remote.SFTPClient
 	root   Path
 }
 
-func NewSFTPFileSystem(client SFTPClient, root Path) *SFTPFileSystem {
+func NewSFTPFileSystem(client remote.SFTPClient, root Path) *SFTPFileSystem {
 	return &SFTPFileSystem{
 		client: client,
 		root:   root,
@@ -34,7 +35,7 @@ func (fs *SFTPFileSystem) Open(path Path) (FileReader, error) {
 type sftpFileReader struct {
 	*sftp.File
 
-	client SFTPClient
+	client remote.SFTPClient
 }
 
 func (fr *sftpFileReader) Readdir() ([]os.FileInfo, error) {
@@ -66,7 +67,7 @@ func (fs *SFTPFileSystem) Create(path Path) (FileWriter, error) {
 type sftpFileWriter struct {
 	*sftp.File
 
-	client SFTPClient
+	client remote.SFTPClient
 }
 
 func (fw *sftpFileWriter) Chtimes(atime time.Time, mtime time.Time) error {

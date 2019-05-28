@@ -10,6 +10,7 @@ import (
 
 	"github.com/pkg/sftp"
 	"github.com/tommie/fisy/fs"
+	"github.com/tommie/fisy/remote"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -86,7 +87,7 @@ func makeFileSystemFromURL(u *url.URL) (fs.WriteableFileSystem, func(error) erro
 }
 
 func newSFTPFileSystem(host, path string) (fs.WriteableFileSystem, func() error, error) {
-	dial := func() (fs.RetryableSFTPClient, error) {
+	dial := func() (remote.CloseableSFTPClient, error) {
 		hkcb, err := knownhosts.New(os.ExpandEnv("$HOME/.ssh/known_hosts"))
 		if err != nil {
 			return nil, err
@@ -123,7 +124,7 @@ func newSFTPFileSystem(host, path string) (fs.WriteableFileSystem, func() error,
 		}, nil
 	}
 
-	sftpc, err := fs.NewRetryingSFTPClient(dial, 12*time.Hour)
+	sftpc, err := remote.NewReconnectingSFTPClient(dial)
 	if err != nil {
 		return nil, nil, err
 	}

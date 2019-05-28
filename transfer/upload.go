@@ -11,6 +11,7 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/tommie/fisy/fs"
+	"github.com/tommie/fisy/remote"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -142,7 +143,7 @@ func (u *Upload) process(ctx context.Context, fp *filePair) ([]*filePair, error)
 		})
 	}
 	eg.Go(func() error {
-		err := u.transfer(fp)
+		err := u.transfer(ctx, fp)
 		if err != nil {
 			glog.Errorf("Failed to transfer %q: %v", fp.path, err)
 			glog.V(1).Infof("Source: %+v\nDestination: %+v", fp.src, fp.dest)
@@ -242,14 +243,16 @@ func readdir(fs fs.ReadableFileSystem, path fs.Path) ([]os.FileInfo, error) {
 	return fr.Readdir()
 }
 
-func (u *Upload) transfer(fp *filePair) error {
-	u.stats.lastPath.Store(fp)
+func (u *Upload) transfer(ctx context.Context, fp *filePair) error {
+	return remote.Idempotent(ctx, func() error {
+		u.stats.lastPath.Store(fp)
 
-	if fp.FileInfo().IsDir() {
-		return u.transferDirectory(fp)
-	}
+		if fp.FileInfo().IsDir() {
+			return u.transferDirectory(fp)
+		}
 
-	return u.transferFile(fp)
+		return u.transferFile(fp)
+	})
 }
 
 func (u *Upload) transferFile(fp *filePair) error {
@@ -440,7 +443,7 @@ func (u *Upload) Stats() UploadStats {
 		IgnoredFiles:       atomic.LoadUint64(&u.stats.IgnoredFiles),
 		IgnoredDirectories: atomic.LoadUint64(&u.stats.IgnoredDirectories),
 
-		DiscardedFiles:       atomic.LoadUint64(&u.stats.DiscardedFiles),
+		DiscardedFiles: atomic.LoadUint64(&u.stats.DiscardedFiles),
 
 		lastPath: u.stats.lastPath,
 	}
@@ -470,7 +473,7 @@ type UploadStats struct {
 	IgnoredFiles       uint64
 	IgnoredDirectories uint64
 
-	DiscardedFiles       uint64
+	DiscardedFiles uint64
 
 	lastPath *atomic.Value // *filePath
 }
