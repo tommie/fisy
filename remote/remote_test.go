@@ -127,10 +127,10 @@ func TestIdempotentDeadline(t *testing.T) {
 		t.Errorf("Idempotent error: got %v, want %v", err, want)
 	}
 
-	if want := 1; i != want {
-		t.Errorf("Idempotent calls: got %v, want %v", i, want)
+	if want := 1; i < want {
+		t.Errorf("Idempotent calls: got %v, want >=%v", i, want)
 	}
-	if want := 1; nafterCalls != want {
-		t.Errorf("time.After calls: got %v, want %v", nafterCalls, want)
+	if want := 1; nafterCalls < want {
+		t.Errorf("time.After calls: got %v, want >=%v", nafterCalls, want)
 	}
 }
