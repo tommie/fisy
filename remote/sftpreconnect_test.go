@@ -14,7 +14,7 @@ import (
 var reconnectingSFTPClientIsACloseableSFTPClient CloseableSFTPClient = &ReconnectingSFTPClient{}
 
 func TestReconnectingSFTPClientClose(t *testing.T) {
-	mc := testutil.NewFakeSFTPClient()
+	mc := testutil.NewFakeSFTPClient("path")
 	c, err := NewReconnectingSFTPClient(func() (CloseableSFTPClient, error) {
 		return mc, nil
 	})
@@ -38,7 +38,7 @@ func TestReconnectingSFTPClientClose(t *testing.T) {
 
 func TestReconnectingSFTPClientDoHandlesDialerError(t *testing.T) {
 	wantErr := fmt.Errorf("fake error")
-	mc := testutil.NewFakeSFTPClient()
+	mc := testutil.NewFakeSFTPClient("path")
 	var i int
 	c, err := NewReconnectingSFTPClient(func() (CloseableSFTPClient, error) {
 		i++
@@ -70,7 +70,7 @@ func TestReconnectingSFTPClientDoHandlesDialerError(t *testing.T) {
 }
 
 func TestReconnectingSFTPClientDoesntReconnectAfterClose(t *testing.T) {
-	mc := testutil.NewFakeSFTPClient()
+	mc := testutil.NewFakeSFTPClient("path")
 	var i int
 	c, err := NewReconnectingSFTPClient(func() (CloseableSFTPClient, error) {
 		i++
@@ -118,7 +118,7 @@ func TestReconnectingSFTPClientOps(t *testing.T) {
 		t.Run(tst.Name, func(t *testing.T) {
 			t.Parallel()
 
-			mc := testutil.NewFakeSFTPClient()
+			mc := testutil.NewFakeSFTPClient("path")
 			c, err := NewReconnectingSFTPClient(func() (CloseableSFTPClient, error) {
 				return mc, nil
 			})
