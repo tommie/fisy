@@ -11,19 +11,23 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-type SFTPFileSystem struct {
+// An SFTP uses SFTP to read and write files. It doesn't do
+// retries, and should be used together with
+// remote.ReconnectingSFTPClient and remote.Idempotent.
+type SFTP struct {
 	client remote.SFTPClient
 	root   Path
 }
 
-func NewSFTPFileSystem(client remote.SFTPClient, root Path) *SFTPFileSystem {
-	return &SFTPFileSystem{
+// NewSFTP creates a new file system at the given root path.
+func NewSFTP(client remote.SFTPClient, root Path) *SFTP {
+	return &SFTP{
 		client: client,
 		root:   root,
 	}
 }
 
-func (fs *SFTPFileSystem) Open(path Path) (FileReader, error) {
+func (fs *SFTP) Open(path Path) (FileReader, error) {
 	p := string(fs.root.Resolve(path))
 	f, err := fs.client.Open(p)
 	if err != nil {
@@ -46,7 +50,7 @@ func (fr *sftpFileReader) Readdir() ([]os.FileInfo, error) {
 	return fis, nil
 }
 
-func (fs *SFTPFileSystem) Readlink(path Path) (Path, error) {
+func (fs *SFTP) Readlink(path Path) (Path, error) {
 	p := string(fs.root.Resolve(path))
 	linkdest, err := fs.client.ReadLink(p)
 	if err != nil {
@@ -55,30 +59,28 @@ func (fs *SFTPFileSystem) Readlink(path Path) (Path, error) {
 	return Path(linkdest), nil
 }
 
-func (fs *SFTPFileSystem) Create(path Path) (FileWriter, error) {
+func (fs *SFTP) Stat() (FSInfo, error) {
+	sf, err := fs.client.StatVFS(string(fs.root))
+	if err != nil {
+		return FSInfo{}, err
+	}
+	return FSInfo{FreeSpace: sf.Frsize * sf.Bavail}, nil
+}
+
+func (fs *SFTP) Create(path Path) (FileWriter, error) {
 	p := string(fs.root.Resolve(path))
 	f, err := fs.client.Create(p)
 	if err != nil {
 		return nil, &os.PathError{Op: "sftp:create", Path: p, Err: err}
 	}
-	return &sftpFileWriter{f, fs.client}, nil
+	return f, nil
 }
 
-type sftpFileWriter struct {
-	*sftp.File
-
-	client remote.SFTPClient
-}
-
-func (fw *sftpFileWriter) Chtimes(atime time.Time, mtime time.Time) error {
-	return fw.client.Chtimes(fw.File.Name(), atime, mtime)
-}
-
-func (fs *SFTPFileSystem) Keep(path Path) error {
+func (fs *SFTP) Keep(path Path) error {
 	return nil
 }
 
-func (fs *SFTPFileSystem) Mkdir(path Path, mode os.FileMode, uid, gid int) error {
+func (fs *SFTP) Mkdir(path Path, mode os.FileMode, uid, gid int) error {
 	p := string(fs.root.Resolve(path))
 	if err := fs.client.Mkdir(p); err != nil {
 		if IsExist(err) {
@@ -103,7 +105,7 @@ func (fs *SFTPFileSystem) Mkdir(path Path, mode os.FileMode, uid, gid int) error
 	return nil
 }
 
-func (fs *SFTPFileSystem) Link(oldpath Path, newpath Path) error {
+func (fs *SFTP) Link(oldpath Path, newpath Path) error {
 	oldp, newp := string(fs.root.Resolve(oldpath)), string(fs.root.Resolve(newpath))
 	if err := fs.client.Link(oldp, newp); err != nil {
 		return &os.LinkError{Op: "sftp:link", Old: oldp, New: newp, Err: err}
@@ -111,7 +113,7 @@ func (fs *SFTPFileSystem) Link(oldpath Path, newpath Path) error {
 	return nil
 }
 
-func (fs *SFTPFileSystem) Symlink(oldpath Path, newpath Path) error {
+func (fs *SFTP) Symlink(oldpath Path, newpath Path) error {
 	oldp, newp := string(oldpath), string(fs.root.Resolve(newpath))
 	if err := fs.client.Symlink(oldp, newp); err != nil {
 		return &os.LinkError{Op: "sftp:symlink", Old: oldp, New: newp, Err: err}
@@ -119,7 +121,7 @@ func (fs *SFTPFileSystem) Symlink(oldpath Path, newpath Path) error {
 	return nil
 }
 
-func (fs *SFTPFileSystem) Rename(oldpath Path, newpath Path) error {
+func (fs *SFTP) Rename(oldpath Path, newpath Path) error {
 	oldp, newp := string(fs.root.Resolve(oldpath)), string(fs.root.Resolve(newpath))
 	if err := fs.client.PosixRename(oldp, newp); err != nil {
 		return &os.LinkError{Op: "sftp:rename", Old: oldp, New: newp, Err: err}
@@ -127,11 +129,13 @@ func (fs *SFTPFileSystem) Rename(oldpath Path, newpath Path) error {
 	return nil
 }
 
-func (fs *SFTPFileSystem) RemoveAll(path Path) error {
+func (fs *SFTP) RemoveAll(path Path) error {
 	return fs.removeAll(context.Background(), path, semaphore.NewWeighted(64))
 }
 
-func (fs *SFTPFileSystem) removeAll(ctx context.Context, path Path, sem *semaphore.Weighted) error {
+// removeAll removes a hierarchy rooted at path, with concurrency
+// limit given by the semaphore.
+func (fs *SFTP) removeAll(ctx context.Context, path Path, sem *semaphore.Weighted) error {
 	readdir := func() ([]os.FileInfo, error) {
 		if err := sem.Acquire(ctx, 1); err != nil {
 			return nil, err
@@ -174,7 +178,7 @@ func (fs *SFTPFileSystem) removeAll(ctx context.Context, path Path, sem *semapho
 	return remove(path)
 }
 
-func (fs *SFTPFileSystem) Remove(path Path) error {
+func (fs *SFTP) Remove(path Path) error {
 	p := string(fs.root.Resolve(path))
 	if err := fs.client.Remove(p); err != nil {
 		return &os.PathError{Op: "sftp:remove", Path: p, Err: err}
@@ -182,15 +186,7 @@ func (fs *SFTPFileSystem) Remove(path Path) error {
 	return nil
 }
 
-func (fs *SFTPFileSystem) Stat() (FSInfo, error) {
-	sf, err := fs.client.StatVFS(string(fs.root))
-	if err != nil {
-		return FSInfo{}, err
-	}
-	return FSInfo{FreeSpace: sf.Frsize * sf.Bavail}, nil
-}
-
-func (fs *SFTPFileSystem) Chmod(path Path, mode os.FileMode) error {
+func (fs *SFTP) Chmod(path Path, mode os.FileMode) error {
 	p := string(fs.root.Resolve(path))
 	if err := fs.client.Chmod(p, mode); err != nil {
 		return &os.PathError{Op: "sftp:chmod", Path: p, Err: err}
@@ -198,7 +194,7 @@ func (fs *SFTPFileSystem) Chmod(path Path, mode os.FileMode) error {
 	return nil
 }
 
-func (fs *SFTPFileSystem) Lchown(path Path, uid, gid int) error {
+func (fs *SFTP) Lchown(path Path, uid, gid int) error {
 	p := string(fs.root.Resolve(path))
 	if err := fs.client.Chown(p, uid, gid); err != nil {
 		return &os.PathError{Op: "sftp:lchown", Path: p, Err: err}
@@ -206,7 +202,7 @@ func (fs *SFTPFileSystem) Lchown(path Path, uid, gid int) error {
 	return nil
 }
 
-func (fs *SFTPFileSystem) Chtimes(path Path, atime time.Time, mtime time.Time) error {
+func (fs *SFTP) Chtimes(path Path, atime time.Time, mtime time.Time) error {
 	p := string(fs.root.Resolve(path))
 	if err := fs.client.Chtimes(p, atime, mtime); err != nil {
 		return &os.PathError{Op: "sftp:chtimes", Path: p, Err: err}

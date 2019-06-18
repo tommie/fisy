@@ -129,7 +129,7 @@ func newSFTPFileSystem(host, path string) (fs.WriteableFileSystem, func() error,
 		return nil, nil, err
 	}
 
-	return fs.NewSFTPFileSystem(sftpc, fs.Path(path)), sftpc.Close, nil
+	return fs.NewSFTP(sftpc, fs.Path(path)), sftpc.Close, nil
 }
 
 type connectedSFTPClient struct {
