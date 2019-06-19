@@ -70,7 +70,15 @@ func (fs *SFTP) Stat() (FSInfo, error) {
 func (fs *SFTP) Create(path Path) (FileWriter, error) {
 	p := string(fs.root.Resolve(path))
 	f, err := fs.client.Create(p)
-	if err != nil {
+	if IsPermission(err) {
+		if err2 := fs.client.Remove(p); err2 != nil {
+			return nil, err
+		}
+		f, err = fs.client.Create(p)
+		if err != nil {
+			return nil, err
+		}
+	} else if err != nil {
 		return nil, &os.PathError{Op: "sftp:create", Path: p, Err: err}
 	}
 	return f, nil
