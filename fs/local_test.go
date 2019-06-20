@@ -177,28 +177,6 @@ func TestLocalCreate(t *testing.T) {
 	}
 }
 
-func TestLocalCreateCanOverwrite(t *testing.T) {
-	lfs, done := newTestLocal(t)
-	defer done()
-
-	fw, err := lfs.Create(Path("file-noperms"))
-	if err != nil {
-		t.Fatalf("Create failed: %v", err)
-	}
-
-	if err := fw.Close(); err != nil {
-		t.Errorf("Close failed: %v", err)
-	}
-
-	tree := testTree()
-	findMemDirEnt(tree, "file-noperms").Mode = 0666 &^ testUmask
-	findMemDirEnt(tree, "file-noperms").Content = ""
-
-	if err := checkTestLocal(lfs, tree); err != nil {
-		t.Error(err)
-	}
-}
-
 func TestLocalFileWriter(t *testing.T) {
 	lfs, done := newTestLocal(t)
 	defer done()

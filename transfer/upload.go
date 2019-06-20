@@ -315,7 +315,13 @@ func (u *Upload) transferFile(fp *filePair) error {
 	defer sf.Close()
 
 	df, err := u.dest.Create(fp.path)
-	if err != nil {
+	if fs.IsPermission(err) {
+		u.dest.Remove(fp.path)
+		df, err = u.dest.Create(fp.path)
+		if err != nil {
+			return err
+		}
+	} else if err != nil {
 		return err
 	}
 

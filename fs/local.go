@@ -60,13 +60,7 @@ func (fs *Local) Stat() (FSInfo, error) {
 func (fs *Local) Create(path Path) (FileWriter, error) {
 	p := string(fs.root.Resolve(path))
 	f, err := os.Create(p)
-	if IsPermission(err) {
-		os.Remove(p)
-		f, err = os.Create(p)
-		if err != nil {
-			return nil, err
-		}
-	} else if err != nil {
+	if err != nil {
 		return nil, err
 	}
 	return &localFileWriter{f}, nil

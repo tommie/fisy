@@ -156,28 +156,6 @@ func TestSFTPCreate(t *testing.T) {
 	}
 }
 
-func TestSFTPCreateCanOverwrite(t *testing.T) {
-	fs, done := newTestSFTP(t)
-	defer done()
-
-	fw, err := fs.Create(Path("file-noperms"))
-	if err != nil {
-		t.Fatalf("Create failed: %v", err)
-	}
-
-	if err := fw.Close(); err != nil {
-		t.Errorf("Close failed: %v", err)
-	}
-
-	tree := testTree()
-	findMemDirEnt(tree, "file-noperms").Mode = 0666 &^ testUmask
-	findMemDirEnt(tree, "file-noperms").Content = ""
-
-	if err := checkTestSFTP(fs, tree); err != nil {
-		t.Error(err)
-	}
-}
-
 func TestSFTPFileWriter(t *testing.T) {
 	fs, done := newTestSFTP(t)
 	defer done()
