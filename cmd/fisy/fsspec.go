@@ -50,7 +50,7 @@ func makeFileSystemFromURL(u *url.URL) (fs.WriteableFileSystem, func(error) erro
 		if err != nil {
 			return nil, nil, err
 		}
-		cfs, err := fs.NewCOWFileSystem(raw, host, time.Now())
+		cfs, err := fs.NewCOW(raw, host, time.Now())
 		return cfs, func(err error) error {
 			if err == nil {
 				if err := cfs.Finish(); err != nil {

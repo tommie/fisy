@@ -10,25 +10,25 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-type cowFileSystem struct {
+type baseCOW struct {
 	fs    WriteableFileSystem
 	rroot Path
 	wroot Path
 }
 
-func (fs *cowFileSystem) Open(path Path) (FileReader, error) {
+func (fs *baseCOW) Open(path Path) (FileReader, error) {
 	return fs.fs.Open(fs.rroot.Resolve(path))
 }
 
-func (fs *cowFileSystem) Readlink(path Path) (Path, error) {
+func (fs *baseCOW) Readlink(path Path) (Path, error) {
 	return fs.fs.Readlink(fs.rroot.Resolve(path))
 }
 
-func (fs *cowFileSystem) Create(path Path) (FileWriter, error) {
+func (fs *baseCOW) Create(path Path) (FileWriter, error) {
 	return fs.fs.Create(fs.wroot.Resolve(path))
 }
 
-func (fs *cowFileSystem) Keep(path Path) error {
+func (fs *baseCOW) Keep(path Path) error {
 	err := fs.fs.Link(fs.rroot.Resolve(path), fs.wroot.Resolve(path))
 	if err == nil || !IsPermission(err) {
 		return err
@@ -55,53 +55,53 @@ func (fs *cowFileSystem) Keep(path Path) error {
 	return fs.fs.Mkdir(fs.wroot.Resolve(path), fi.Mode()|0200, uid, gid)
 }
 
-func (fs *cowFileSystem) Mkdir(path Path, mode os.FileMode, uid, gid int) error {
+func (fs *baseCOW) Mkdir(path Path, mode os.FileMode, uid, gid int) error {
 	return fs.fs.Mkdir(fs.wroot.Resolve(path), mode, uid, gid)
 }
 
-func (fs *cowFileSystem) Link(oldpath Path, newpath Path) error {
+func (fs *baseCOW) Link(oldpath Path, newpath Path) error {
 	return fs.fs.Link(fs.wroot.Resolve(oldpath), fs.wroot.Resolve(newpath))
 }
 
-func (fs *cowFileSystem) Symlink(oldpath Path, newpath Path) error {
+func (fs *baseCOW) Symlink(oldpath Path, newpath Path) error {
 	return fs.fs.Symlink(oldpath, fs.wroot.Resolve(newpath))
 }
 
-func (fs *cowFileSystem) Rename(oldpath Path, newpath Path) error {
+func (fs *baseCOW) Rename(oldpath Path, newpath Path) error {
 	if err := fs.fs.Keep(oldpath); err != nil {
 		return err
 	}
 	return fs.fs.Rename(fs.wroot.Resolve(oldpath), fs.wroot.Resolve(newpath))
 }
 
-func (fs *cowFileSystem) RemoveAll(path Path) error {
+func (fs *baseCOW) RemoveAll(path Path) error {
 	// Nothing to do.
 	return nil
 }
 
-func (fs *cowFileSystem) Remove(path Path) error {
+func (fs *baseCOW) Remove(path Path) error {
 	// Nothing to do.
 	return nil
 }
 
-func (fs *cowFileSystem) Stat() (FSInfo, error) {
+func (fs *baseCOW) Stat() (FSInfo, error) {
 	return fs.fs.Stat()
 }
 
-func (fs *cowFileSystem) Chmod(path Path, mode os.FileMode) error {
+func (fs *baseCOW) Chmod(path Path, mode os.FileMode) error {
 	return fs.fs.Chmod(fs.wroot.Resolve(path), mode)
 }
 
-func (fs *cowFileSystem) Lchown(path Path, uid, gid int) error {
+func (fs *baseCOW) Lchown(path Path, uid, gid int) error {
 	return fs.fs.Lchown(fs.wroot.Resolve(path), uid, gid)
 }
 
-func (fs *cowFileSystem) Chtimes(path Path, atime time.Time, mtime time.Time) error {
+func (fs *baseCOW) Chtimes(path Path, atime time.Time, mtime time.Time) error {
 	return fs.fs.Chtimes(fs.wroot.Resolve(path), atime, mtime)
 }
 
-type COWFileSystem struct {
-	cowFileSystem
+type COW struct {
+	baseCOW
 
 	copyOnce  sync.Once
 	copyGroup errgroup.Group
@@ -112,7 +112,7 @@ const (
 	completeSuffix Path = ".complete"
 )
 
-func NewCOWFileSystem(fs WriteableFileSystem, host string, t time.Time) (*COWFileSystem, error) {
+func NewCOW(fs WriteableFileSystem, host string, t time.Time) (*COW, error) {
 	if host == "" {
 		return nil, errors.New("host must be non-empty")
 	}
@@ -128,8 +128,8 @@ func NewCOWFileSystem(fs WriteableFileSystem, host string, t time.Time) (*COWFil
 		}
 	}
 
-	return &COWFileSystem{
-		cowFileSystem: cowFileSystem{
+	return &COW{
+		baseCOW: baseCOW{
 			fs:    fs,
 			rroot: Path(host).Resolve(rdir),
 			wroot: Path(host).Resolve(ts),
@@ -137,7 +137,7 @@ func NewCOWFileSystem(fs WriteableFileSystem, host string, t time.Time) (*COWFil
 	}, nil
 }
 
-func (fs *COWFileSystem) initCopy() error {
+func (fs *COW) initCopy() error {
 	fs.copyOnce.Do(func() {
 		fs.copyGroup.Go(func() error {
 			if err := fs.fs.Mkdir(fs.wroot.Dir(), 0750, -1, -1); err != nil && !IsExist(err) {
@@ -153,7 +153,7 @@ func (fs *COWFileSystem) initCopy() error {
 	return fs.copyGroup.Wait()
 }
 
-func (fs *COWFileSystem) atomicSymlink(oldpath Path, newpath Path) error {
+func (fs *COW) atomicSymlink(oldpath Path, newpath Path) error {
 	tmp := newpath.Dir().Resolve(".new")
 	if err := fs.fs.Symlink(oldpath, tmp); err != nil {
 		return err
@@ -161,7 +161,7 @@ func (fs *COWFileSystem) atomicSymlink(oldpath Path, newpath Path) error {
 	return fs.fs.Rename(tmp, newpath)
 }
 
-func (fs *COWFileSystem) Finish() error {
+func (fs *COW) Finish() error {
 	// Mark it as complete.
 	if err := fs.atomicSymlink(fs.wroot.Base(), fs.wroot.Dir().Resolve(fs.wroot.Base()+completeSuffix)); err != nil {
 		return err
@@ -174,37 +174,37 @@ func (fs *COWFileSystem) Finish() error {
 	return fs.atomicSymlink(fs.wroot, latestPath)
 }
 
-func (fs *COWFileSystem) Create(path Path) (FileWriter, error) {
+func (fs *COW) Create(path Path) (FileWriter, error) {
 	if err := fs.initCopy(); err != nil {
 		return nil, err
 	}
-	return fs.cowFileSystem.Create(path)
+	return fs.baseCOW.Create(path)
 }
 
-func (fs *COWFileSystem) Keep(path Path) error {
+func (fs *COW) Keep(path Path) error {
 	if err := fs.initCopy(); err != nil {
 		return err
 	}
-	return fs.cowFileSystem.Keep(path)
+	return fs.baseCOW.Keep(path)
 }
 
-func (fs *COWFileSystem) Mkdir(path Path, mode os.FileMode, uid, gid int) error {
+func (fs *COW) Mkdir(path Path, mode os.FileMode, uid, gid int) error {
 	if err := fs.initCopy(); err != nil {
 		return err
 	}
-	return fs.cowFileSystem.Mkdir(path, mode, uid, gid)
+	return fs.baseCOW.Mkdir(path, mode, uid, gid)
 }
 
-func (fs *COWFileSystem) Link(oldpath Path, newpath Path) error {
+func (fs *COW) Link(oldpath Path, newpath Path) error {
 	if err := fs.initCopy(); err != nil {
 		return err
 	}
-	return fs.cowFileSystem.Link(oldpath, newpath)
+	return fs.baseCOW.Link(oldpath, newpath)
 }
 
-func (fs *COWFileSystem) Symlink(oldpath Path, newpath Path) error {
+func (fs *COW) Symlink(oldpath Path, newpath Path) error {
 	if err := fs.initCopy(); err != nil {
 		return err
 	}
-	return fs.cowFileSystem.Symlink(oldpath, newpath)
+	return fs.baseCOW.Symlink(oldpath, newpath)
 }
