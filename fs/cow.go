@@ -56,7 +56,7 @@ func (fs *COW) init() error {
 			if err := fs.fs.Mkdir(fs.wroot.Dir(), 0750, -1, -1); err != nil && !IsExist(err) {
 				return err
 			}
-			if err := fs.fs.Mkdir(fs.wroot, 0750, -1, -1); err != nil && !IsExist(err) {
+			if err := fs.fs.Mkdir(fs.wroot, 0750, -1, -1); err != nil {
 				return err
 			}
 
