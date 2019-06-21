@@ -414,7 +414,7 @@ func TestLocalRemove(t *testing.T) {
 		defer done()
 
 		err := lfs.Remove(Path("dir1"))
-		if !strings.Contains(err.Error(), "not empty") {
+		if err == nil || !strings.Contains(err.Error(), "not empty") {
 			t.Fatalf("Remove error: got %v, want ENOTEMPTY", err)
 		}
 
