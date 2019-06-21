@@ -2,6 +2,7 @@ package fs
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -41,6 +42,9 @@ func NewCOW(fs WriteableFileSystem, host string, t time.Time) (*COW, error) {
 		} else if err != nil {
 			return nil, err
 		}
+	}
+	if ts < rdir {
+		return nil, fmt.Errorf("there is a newer timestamp already: new %v, existing %v", ts, rdir)
 	}
 
 	return &COW{
