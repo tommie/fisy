@@ -4,45 +4,31 @@ import (
 	"context"
 	"io"
 	"os"
-	"sort"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/golang/glog"
 	"github.com/tommie/fisy/fs"
 	"github.com/tommie/fisy/remote"
-	"golang.org/x/sync/errgroup"
 )
 
-type FileOperation rune
-
-const (
-	UnknownFileOperation FileOperation = '?'
-	Create               FileOperation = 'C'
-	Remove               FileOperation = 'R'
-	Keep                 FileOperation = 'K'
-)
-
-const commonModeMask os.FileMode = 0xFFFFF
-
+// An Upload contains information about an in-progress upload. While
+// Run is executing, Stats can be used to get progress information.
 type Upload struct {
-	src          fs.ReadableFileSystem
-	dest         fs.WriteableFileSystem
-	ignoreFilter func(fs.Path) bool
-	nconc        int
+	process
 
 	srcLinks linkSet
 
 	stats UploadStats
 }
 
+// NewUpload creates a new upload, with the given destination and source.
 func NewUpload(dest fs.WriteableFileSystem, src fs.ReadableFileSystem, opts ...UploadOpt) *Upload {
 	u := &Upload{
-		src:          src,
-		dest:         dest,
-		ignoreFilter: func(fs.Path) bool { return false },
-		nconc:        1,
+		process: process{
+			src:  src,
+			dest: dest,
+		},
 
 		srcLinks: newLinkSet(),
 
@@ -50,20 +36,26 @@ func NewUpload(dest fs.WriteableFileSystem, src fs.ReadableFileSystem, opts ...U
 			lastPath: &atomic.Value{},
 		},
 	}
+	u.process.stats = &u.stats.ProcessStats
+	u.process.transfer = u.transfer
 	for _, opt := range opts {
 		opt(u)
 	}
 	return u
 }
 
+// An UploadOpt is an option to NewUpload.
 type UploadOpt func(*Upload)
 
+// WithIgnoreFilter adds a filter function. If the function returns
+// true for a file or directory, it will be completely ignored.
 func WithIgnoreFilter(fun func(fs.Path) bool) UploadOpt {
 	return func(u *Upload) {
 		u.ignoreFilter = fun
 	}
 }
 
+// WithConcurrency sets the transfer concurrency, in files.
 func WithConcurrency(nconc int) UploadOpt {
 	if nconc < 1 {
 		glog.Fatalf("nconc must be at least 1")
@@ -74,156 +66,8 @@ func WithConcurrency(nconc int) UploadOpt {
 	}
 }
 
-func (u *Upload) Run(ctx context.Context) error {
-	fps, err := u.listDir(fs.Path("."))
-	if err != nil {
-		return err
-	}
-
-	return filePairPDFS(ctx, fps, u.process, u.nconc)
-}
-
-func (u *Upload) process(ctx context.Context, fp *filePair) ([]*filePair, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-
-	default:
-		// Continue.
-	}
-
-	atomic.AddUint32(&u.stats.InProgress, 1)
-	defer atomic.AddUint32(&u.stats.InProgress, ^uint32(0))
-
-	if fp.src != nil {
-		if fp.src.IsDir() {
-			atomic.AddUint64(&u.stats.SourceDirectories, 1)
-		} else {
-			atomic.AddUint64(&u.stats.SourceBytes, uint64(fp.src.Size()))
-			atomic.AddUint64(&u.stats.SourceFiles, 1)
-		}
-	}
-
-	isDir := fp.FileInfo().IsDir()
-	filterPath := "/" + fp.path
-	if isDir {
-		filterPath += "/"
-	}
-	if u.ignoreFilter(filterPath) {
-		if isDir {
-			atomic.AddUint64(&u.stats.IgnoredDirectories, 1)
-		} else {
-			atomic.AddUint64(&u.stats.IgnoredFiles, 1)
-		}
-		glog.V(3).Infof("Ignored %q.", fp.path)
-		return nil, nil
-	}
-
-	var fps []*filePair
-	var eg errgroup.Group
-	if fp.src != nil && fp.src.IsDir() {
-		eg.Go(func() error {
-			var err error
-			fps, err = u.listDir(fp.path)
-			return err
-		})
-	}
-	eg.Go(func() error {
-		err := u.transfer(ctx, fp)
-		if err != nil {
-			glog.Errorf("Failed to transfer %q: %v", fp.path, err)
-			glog.V(1).Infof("Source: %+v\nDestination: %+v", fp.src, fp.dest)
-		}
-		return err
-	})
-	return fps, eg.Wait()
-}
-
-func (u *Upload) listDir(path fs.Path) ([]*filePair, error) {
-	var eg errgroup.Group
-	var srcfiles, destfiles []os.FileInfo
-	eg.Go(func() error {
-		var err error
-		srcfiles, err = readdir(u.src, path)
-		if err != nil {
-			return err
-		}
-		sort.Slice(srcfiles, func(i, j int) bool { return srcfiles[i].Name() < srcfiles[j].Name() })
-		return nil
-	})
-	eg.Go(func() error {
-		var err error
-		destfiles, err = readdir(u.dest, path)
-		if err != nil && !fs.IsNotExist(err) {
-			return err
-		}
-		sort.Slice(destfiles, func(i, j int) bool { return destfiles[i].Name() < destfiles[j].Name() })
-		return nil
-	})
-	if err := eg.Wait(); err != nil {
-		return nil, err
-	}
-
-	// Join the two sorted lists.
-	var fps []*filePair
-	var i, j int
-	for i < len(srcfiles) && j < len(destfiles) {
-		sf := srcfiles[i]
-		df := destfiles[j]
-		var name string
-		if sf.Name() < df.Name() {
-			// New file.
-			df = nil
-			name = sf.Name()
-			i++
-		} else if sf.Name() > df.Name() {
-			// Removed file.
-			sf = nil
-			name = df.Name()
-			j++
-		} else {
-			// In both.
-			name = sf.Name()
-			i++
-			j++
-		}
-		fps = append(fps, &filePair{path: path.Resolve(fs.Path(name)), src: sf, dest: df})
-	}
-	for ; i < len(srcfiles); i++ {
-		f := srcfiles[i]
-		fps = append(fps, &filePair{path: path.Resolve(fs.Path(f.Name())), src: f})
-	}
-	for ; j < len(destfiles); j++ {
-		f := destfiles[j]
-		fps = append(fps, &filePair{path: path.Resolve(fs.Path(f.Name())), dest: f})
-	}
-
-	// To reduce memory footprint, we want to work on files first,
-	// since directories may add more in-memory data. Later files
-	// in fps will be worked on earlier.
-	sort.Slice(fps, func(i, j int) bool {
-		idir := fps[i].FileInfo().IsDir()
-		jdir := fps[j].FileInfo().IsDir()
-		if idir != jdir {
-			// If i is a directory, then it is "less".
-			return idir
-		}
-		return fps[i].path < fps[j].path
-	})
-
-	return fps, nil
-}
-
-func readdir(fs fs.ReadableFileSystem, path fs.Path) ([]os.FileInfo, error) {
-	fr, err := fs.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer fr.Close()
-
-	return fr.Readdir()
-}
-
+// Transfer ensures a single file or directory has been fully
+// transferred. It may do retries in case of failure.
 func (u *Upload) transfer(ctx context.Context, fp *filePair) error {
 	return remote.Idempotent(ctx, func() error {
 		u.stats.lastPath.Store(fp)
@@ -236,6 +80,7 @@ func (u *Upload) transfer(ctx context.Context, fp *filePair) error {
 	})
 }
 
+// transferFile transfers a single file from source to dest.
 func (u *Upload) transferFile(fp *filePair) error {
 	if fp.src == nil {
 		// Removed file.
@@ -269,25 +114,44 @@ func (u *Upload) transferFile(fp *filePair) error {
 	}
 
 	if fp.src.Mode()&os.ModeSymlink != 0 {
-		// We should symlink.
-		linkdest, err := u.src.Readlink(fp.path)
-		if fs.IsNotExist(err) {
-			// The symlink was removed between listing and transferring.
-			u.srcLinks.Discard(inode, fp.path)
-			atomic.AddUint64(&u.stats.DiscardedFiles, 1)
-			return nil
-		} else if err != nil {
-			return err
-		}
-		glog.V(1).Infof("Symlinking %q to %q...", fp.path, linkdest)
-		atomic.AddUint64(&u.stats.UploadedBytes, uint64(len(linkdest)))
-		atomic.AddUint64(&u.stats.UploadedFiles, 1)
-		return u.dest.Symlink(linkdest, fp.path)
+		return u.createSymlink(fp, inode)
 	}
 
-	sf, err := u.src.Open(fp.path)
+	return u.copyFile(fp, inode)
+}
+
+// needsTransfer returns true if the source and destination as different.
+func needsTransfer(dest, src os.FileInfo) bool {
+	if dest.IsDir() {
+		// We force u+w so we can continue working on the directory.
+		return dest.Mode()&commonModeMask&^0200 != src.Mode()&commonModeMask&^0200
+	}
+	return dest.Size() != src.Size() ||
+		dest.Mode()&commonModeMask != src.Mode()&commonModeMask ||
+		!dest.ModTime().Truncate(time.Second).Equal(src.ModTime().Truncate(time.Second))
+}
+
+func (u *Upload) createSymlink(fp *filePair, inode uint64) error {
+	linkdest, err := u.src.Readlink(fp.path)
 	if fs.IsNotExist(err) {
 		// The symlink was removed between listing and transferring.
+		u.srcLinks.Discard(inode, fp.path)
+		atomic.AddUint64(&u.stats.DiscardedFiles, 1)
+		return nil
+	} else if err != nil {
+		return err
+	}
+	glog.V(1).Infof("Symlinking %q to %q...", fp.path, linkdest)
+	atomic.AddUint64(&u.stats.UploadedBytes, uint64(len(linkdest)))
+	atomic.AddUint64(&u.stats.UploadedFiles, 1)
+	return u.dest.Symlink(linkdest, fp.path)
+}
+
+// copyFile copies a file byte-by-byte.
+func (u *Upload) copyFile(fp *filePair, inode uint64) error {
+	sf, err := u.src.Open(fp.path)
+	if fs.IsNotExist(err) {
+		// The file was removed between listing and transferring.
 		u.srcLinks.Discard(inode, fp.path)
 		atomic.AddUint64(&u.stats.DiscardedFiles, 1)
 		return nil
@@ -319,11 +183,11 @@ func (u *Upload) transferFile(fp *filePair) error {
 			return err
 		}
 
-		if sstat, ok := fp.src.Sys().(*syscall.Stat_t); ok {
-			if err := df.Chown(int(sstat.Uid), int(sstat.Gid)); err != nil {
+		if attrs, ok := fs.FileAttrsFromFileInfo(fp.src); ok {
+			if err := df.Chown(attrs.UID, attrs.GID); err != nil {
 				return err
 			}
-			atime = time.Unix(sstat.Atim.Sec, sstat.Atim.Nsec)
+			atime = attrs.AccessTime
 		}
 		return nil
 	}()
@@ -349,6 +213,7 @@ func (u *Upload) transferFile(fp *filePair) error {
 	return nil
 }
 
+// transferDirectory transfers a single directory.
 func (u *Upload) transferDirectory(fp *filePair) error {
 	if fp.src == nil {
 		// Removed directory.
@@ -369,18 +234,21 @@ func (u *Upload) transferDirectory(fp *filePair) error {
 		// Fall back to normal transfer.
 	}
 
-	uid := -1
-	gid := -1
-	if sstat, ok := fp.src.Sys().(*syscall.Stat_t); ok {
-		uid = int(sstat.Uid)
-		gid = int(sstat.Gid)
+	return u.makeDirectory(fp)
+}
+
+func (u *Upload) makeDirectory(fp *filePair) error {
+	attrs, ok := fs.FileAttrsFromFileInfo(fp.src)
+	if !ok {
+		attrs.UID = -1
+		attrs.GID = -1
 	}
 
 	if fp.dest == nil {
 		glog.V(1).Infof("Creating directory %q...", fp.path)
 		atomic.AddUint64(&u.stats.CreatedDirectories, 1)
 		// We force u+w so we can continue working on the directory.
-		return u.dest.Mkdir(fp.path, fp.src.Mode()&commonModeMask|0200, uid, gid)
+		return u.dest.Mkdir(fp.path, fp.src.Mode()&commonModeMask|0200, attrs.UID, attrs.GID)
 	}
 
 	glog.V(1).Infof("Updating directory %q (%+v %+v)...", fp.path, fp.src.ModTime(), fp.dest.ModTime())
@@ -388,7 +256,7 @@ func (u *Upload) transferDirectory(fp *filePair) error {
 	if err := u.dest.Chmod(fp.path, fp.src.Mode()&commonModeMask|0200); err != nil {
 		return err
 	}
-	if err := u.dest.Lchown(fp.path, uid, gid); err != nil {
+	if err := u.dest.Lchown(fp.path, attrs.UID, attrs.GID); err != nil {
 		return err
 	}
 	atomic.AddUint64(&u.stats.UpdatedDirectories, 1)
@@ -396,24 +264,11 @@ func (u *Upload) transferDirectory(fp *filePair) error {
 	return nil
 }
 
-func needsTransfer(dest, src os.FileInfo) bool {
-	if dest.IsDir() {
-		// We force u+w so we can continue working on the directory.
-		return dest.Mode()&commonModeMask&^0200 != src.Mode()&commonModeMask&^0200
-	}
-	return dest.Size() != src.Size() ||
-		dest.Mode()&commonModeMask != src.Mode()&commonModeMask ||
-		!dest.ModTime().Truncate(time.Second).Equal(src.ModTime().Truncate(time.Second))
-}
-
+// Stats returns statistics about the in-progress upload. This may be
+// invoked while Run is executing.
 func (u *Upload) Stats() UploadStats {
-	return UploadStats{
-		InProgress: atomic.LoadUint32(&u.stats.InProgress),
+	us := UploadStats{
 		InodeTable: uint32(u.srcLinks.Len()),
-
-		SourceBytes:       atomic.LoadUint64(&u.stats.SourceBytes),
-		SourceFiles:       atomic.LoadUint64(&u.stats.SourceFiles),
-		SourceDirectories: atomic.LoadUint64(&u.stats.SourceDirectories),
 
 		UploadedBytes: atomic.LoadUint64(&u.stats.UploadedBytes),
 		UploadedFiles: atomic.LoadUint64(&u.stats.UploadedFiles),
@@ -428,22 +283,19 @@ func (u *Upload) Stats() UploadStats {
 		RemovedFiles:       atomic.LoadUint64(&u.stats.RemovedFiles),
 		RemovedDirectories: atomic.LoadUint64(&u.stats.RemovedDirectories),
 
-		IgnoredFiles:       atomic.LoadUint64(&u.stats.IgnoredFiles),
-		IgnoredDirectories: atomic.LoadUint64(&u.stats.IgnoredDirectories),
-
 		DiscardedFiles: atomic.LoadUint64(&u.stats.DiscardedFiles),
 
 		lastPath: u.stats.lastPath,
 	}
+	us.ProcessStats.CopyFrom(&u.stats.ProcessStats)
+	return us
 }
 
+// UploadStats contains a snapshot of upload statistics.
 type UploadStats struct {
-	InProgress uint32
-	InodeTable uint32
+	ProcessStats
 
-	SourceBytes       uint64
-	SourceFiles       uint64
-	SourceDirectories uint64
+	InodeTable uint32
 
 	UploadedBytes uint64
 	UploadedFiles uint64
@@ -458,14 +310,12 @@ type UploadStats struct {
 	RemovedFiles       uint64
 	RemovedDirectories uint64
 
-	IgnoredFiles       uint64
-	IgnoredDirectories uint64
-
 	DiscardedFiles uint64
 
 	lastPath *atomic.Value // *filePath
 }
 
+// LastPath returns the last path the upload transfer touched.
 func (us *UploadStats) LastPath() string {
 	if fp, ok := us.lastPath.Load().(*filePair); ok {
 		return string(fp.path)
@@ -473,6 +323,8 @@ func (us *UploadStats) LastPath() string {
 	return ""
 }
 
+// LastFileOperation returns the type of operation that was last
+// performed.
 func (us *UploadStats) LastFileOperation() FileOperation {
 	if fp, ok := us.lastPath.Load().(*filePair); ok {
 		switch {
