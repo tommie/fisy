@@ -37,19 +37,6 @@ type Upload struct {
 	stats UploadStats
 }
 
-type filePair struct {
-	path fs.Path
-	src  os.FileInfo
-	dest os.FileInfo
-}
-
-func (fp *filePair) FileInfo() os.FileInfo {
-	if fp.src != nil {
-		return fp.src
-	}
-	return fp.dest
-}
-
 func NewUpload(dest fs.WriteableFileSystem, src fs.ReadableFileSystem, opts ...UploadOpt) *Upload {
 	u := &Upload{
 		src:          src,
