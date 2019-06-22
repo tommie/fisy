@@ -11,6 +11,21 @@ import (
 // linkSet contains a map of source inode information. It is used to
 // ensure only one goroutine creates an inode, and other goroutines
 // are blocking until it's done.
+//
+// Example:
+//
+//   ls := newLinkSet()
+//   inode, targetPath := ls.FinishedFile(destPath, srcFileInfo)
+//   if inode != 0 {
+//     if targetPath != "" {
+//       return os.Link(targetPath, destPath)
+//     }
+//     if err := transferFile(srcFileInfo, destPath); err != nil {
+//       ls.Discard(inode, destPath)
+//       return err
+//     }
+//     ls.Fulfill(inode, destPath)
+//   }
 type linkSet struct {
 	inodes map[uint64]*inodeInfo
 	c      *sync.Cond
@@ -31,32 +46,6 @@ func newLinkSet() linkSet {
 	}
 }
 
-// Offer tells the link set that this file exists. The file is
-// recorded as interesting if it has more than one link. The inode of
-// the source file is returned if interesting. Otherwise zero is
-// returned.
-func (set *linkSet) Offer(src os.FileInfo) uint64 {
-	if src == nil || src.IsDir() {
-		return 0
-	}
-
-	st, ok := src.Sys().(*syscall.Stat_t)
-	if !ok || st.Nlink < 2 {
-		return 0
-	}
-
-	set.c.L.Lock()
-	defer set.c.L.Unlock()
-
-	if _, ok := set.inodes[st.Ino]; !ok {
-		set.inodes[st.Ino] = &inodeInfo{
-			nlink: int(st.Nlink),
-		}
-	}
-
-	return st.Ino
-}
-
 // Len returns the current size of the set.
 func (set *linkSet) Len() int {
 	set.c.L.Lock()
@@ -72,8 +61,19 @@ func (set *linkSet) Fulfill(inode uint64) {
 	// If we failed to upload, this will cause other transfers to
 	// fail as well.
 	set.inodes[inode].uploaded = true
-	set.inodes[inode].nlink--
+	set.decrementLink(inode)
 	set.c.Broadcast()
+}
+
+// decrementLink decrements the link count for the inode, and removes
+// the inode info if there are no more links.
+func (set *linkSet) decrementLink(inode uint64) {
+	set.inodes[inode].nlink--
+	if set.inodes[inode].nlink == 0 {
+		// Clean up. We don't need this in memory anymore.
+		delete(set.inodes, inode)
+	}
+
 }
 
 // Discard removes a file from the set. Use this if the initial file
@@ -85,33 +85,58 @@ func (set *linkSet) Discard(inode uint64, path fs.Path) {
 	if set.inodes[inode].path == path {
 		set.inodes[inode].path = ""
 	}
+	set.decrementLink(inode)
 	set.c.Broadcast()
 }
 
-// FinishedLinkPath returns the path of a finished destination
-// file. It blocks until the file is ready. If this returns empty, it
-// means the source file must be transferred.
-func (set *linkSet) FinishedLinkPath(inode uint64, path fs.Path) fs.Path {
+// FinishedFile returns the inode and path of a finished destination
+// file. It blocks until the file is ready. If this returns zero, it
+// means the inode has no other links. If this returns the empty
+// string, it means the source file must be transferred.
+func (set *linkSet) FinishedFile(path fs.Path, src os.FileInfo) (uint64, fs.Path) {
 	set.c.L.Lock()
 	defer set.c.L.Unlock()
+
+	inode := set.offerLocked(src)
+	if inode == 0 {
+		return 0, ""
+	}
 
 	for !set.inodes[inode].uploaded {
 		if set.inodes[inode].path == "" {
 			// We are the first one here, or the previous
 			// file was discarded.
 			set.inodes[inode].path = path
-			return ""
+			return inode, ""
 		}
 		set.c.Wait()
 	}
 
 	firstPath := set.inodes[inode].path
+	set.decrementLink(inode)
 
-	set.inodes[inode].nlink--
-	if set.inodes[inode].nlink == 0 {
-		// Clean up. We don't need this in memory anymore.
-		delete(set.inodes, inode)
+	return inode, firstPath
+}
+
+// offerLocked tells the link set that this file exists. The file is
+// recorded as interesting if it has more than one link. The inode of
+// the source file is returned if interesting. Otherwise zero is
+// returned.
+func (set *linkSet) offerLocked(src os.FileInfo) uint64 {
+	if src == nil || src.IsDir() {
+		return 0
 	}
 
-	return firstPath
+	st, ok := src.Sys().(*syscall.Stat_t)
+	if !ok || st.Nlink < 2 {
+		return 0
+	}
+
+	if _, ok := set.inodes[st.Ino]; !ok {
+		set.inodes[st.Ino] = &inodeInfo{
+			nlink: int(st.Nlink),
+		}
+	}
+
+	return st.Ino
 }

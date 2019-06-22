@@ -38,10 +38,9 @@ type Upload struct {
 }
 
 type filePair struct {
-	path        fs.Path
-	src         os.FileInfo
-	dest        os.FileInfo
-	linkToInode uint64
+	path fs.Path
+	src  os.FileInfo
+	dest os.FileInfo
 }
 
 func (fp *filePair) FileInfo() os.FileInfo {
@@ -225,11 +224,6 @@ func (u *Upload) listDir(path fs.Path) ([]*filePair, error) {
 		return fps[i].path < fps[j].path
 	})
 
-	for _, fp := range fps {
-		// Allow hardlinks if possible.
-		fp.linkToInode = u.srcLinks.Offer(fp.src)
-	}
-
 	return fps, nil
 }
 
@@ -263,14 +257,15 @@ func (u *Upload) transferFile(fp *filePair) error {
 		return u.dest.Remove(fp.path)
 	}
 
-	if fp.linkToInode != 0 {
-		if firstPath := u.srcLinks.FinishedLinkPath(fp.linkToInode, fp.path); firstPath != "" {
+	inode, firstPath := u.srcLinks.FinishedFile(fp.path, fp.src)
+	if inode != 0 {
+		if firstPath != "" {
 			glog.V(1).Infof("Hard-linking file %q to %q...", fp.path, firstPath)
 			atomic.AddUint64(&u.stats.UploadedFiles, 1)
 			return u.dest.Link(firstPath, fp.path)
 		}
 
-		defer u.srcLinks.Fulfill(fp.linkToInode)
+		defer u.srcLinks.Fulfill(inode)
 	}
 
 	if fp.dest != nil && !needsTransfer(fp.dest, fp.src) {
@@ -291,7 +286,7 @@ func (u *Upload) transferFile(fp *filePair) error {
 		linkdest, err := u.src.Readlink(fp.path)
 		if fs.IsNotExist(err) {
 			// The symlink was removed between listing and transferring.
-			u.srcLinks.Discard(fp.linkToInode, fp.path)
+			u.srcLinks.Discard(inode, fp.path)
 			atomic.AddUint64(&u.stats.DiscardedFiles, 1)
 			return nil
 		} else if err != nil {
@@ -306,7 +301,7 @@ func (u *Upload) transferFile(fp *filePair) error {
 	sf, err := u.src.Open(fp.path)
 	if fs.IsNotExist(err) {
 		// The symlink was removed between listing and transferring.
-		u.srcLinks.Discard(fp.linkToInode, fp.path)
+		u.srcLinks.Discard(inode, fp.path)
 		atomic.AddUint64(&u.stats.DiscardedFiles, 1)
 		return nil
 	} else if err != nil {
