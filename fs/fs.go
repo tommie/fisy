@@ -1,7 +1,6 @@
 package fs
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -113,17 +112,31 @@ type FSInfo struct {
 	FreeSpace uint64
 }
 
-// uidGidFromFileInfo extracts user/group information from a FileInfo.
-func uidGidFromFileInfo(fi os.FileInfo) (uid int, gid int, err error) {
-	if fs, ok := fi.Sys().(*sftp.FileStat); ok {
-		uid = int(fs.UID)
-		gid = int(fs.GID)
-		return
-	}
+type FileAttrs struct {
+	UID        int
+	GID        int
+	AccessTime time.Time
+	NLinks     uint64
+	Inode      uint64
+}
+
+// FileAttrsFromFileInfo extracts system-specific file attributes from a FileInfo.
+func FileAttrsFromFileInfo(fi os.FileInfo) (FileAttrs, bool) {
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-		uid = int(st.Uid)
-		gid = int(st.Gid)
-		return
+		return FileAttrs{
+			UID:        int(st.Uid),
+			GID:        int(st.Gid),
+			AccessTime: time.Unix(st.Atim.Sec, st.Atim.Nsec),
+			NLinks:     st.Nlink,
+			Inode:      st.Ino,
+		}, true
 	}
-	return -1, -1, fmt.Errorf("no UID/GID information for %q", fi.Name())
+	if fs, ok := fi.Sys().(*sftp.FileStat); ok {
+		return FileAttrs{
+			UID:        int(fs.UID),
+			GID:        int(fs.GID),
+			AccessTime: time.Unix(int64(fs.Atime), 0),
+		}, true
+	}
+	return FileAttrs{}, false
 }

@@ -38,7 +38,7 @@ func TestPath(t *testing.T) {
 	})
 }
 
-func TestUidGidFromFileInfo(t *testing.T) {
+func TestFileAttrsFromFileInfo(t *testing.T) {
 	t.Run("os", func(t *testing.T) {
 		tmpf, err := ioutil.TempFile("", "fs_test-")
 		if err != nil {
@@ -52,16 +52,16 @@ func TestUidGidFromFileInfo(t *testing.T) {
 			t.Fatalf("Stat failed: %v", err)
 		}
 
-		uid, gid, err := uidGidFromFileInfo(fi)
-		if err != nil {
-			t.Fatalf("uidGidFromFileInfo failed: %v", err)
+		attrs, ok := FileAttrsFromFileInfo(fi)
+		if !ok {
+			t.Fatalf("FileAttrsFromFileInfo failed")
 		}
 
-		if want := os.Geteuid(); uid != want {
-			t.Errorf("uidGidFromFileInfo uid: got %v, want %v", uid, want)
+		if want := os.Geteuid(); attrs.UID != want {
+			t.Errorf("FileAttrsFromFileInfo uid: got %v, want %v", attrs.UID, want)
 		}
-		if want := os.Getegid(); gid != want {
-			t.Errorf("uidGidFromFileInfo gid: got %v, want %v", gid, want)
+		if want := os.Getegid(); attrs.GID != want {
+			t.Errorf("FileAttrsFromFileInfo gid: got %v, want %v", attrs.GID, want)
 		}
 	})
 
@@ -84,16 +84,16 @@ func TestUidGidFromFileInfo(t *testing.T) {
 			t.Fatalf("Stat failed: %v", err)
 		}
 
-		uid, gid, err := uidGidFromFileInfo(fi)
-		if err != nil {
-			t.Fatalf("uidGidFromFileInfo failed: %v", err)
+		attrs, ok := FileAttrsFromFileInfo(fi)
+		if !ok {
+			t.Fatalf("FileAttrsFromFileInfo failed")
 		}
 
-		if want := os.Geteuid(); uid != want {
-			t.Errorf("uidGidFromFileInfo uid: got %v, want %v", uid, want)
+		if want := os.Geteuid(); attrs.UID != want {
+			t.Errorf("FileAttrsFromFileInfo uid: got %v, want %v", attrs.UID, want)
 		}
-		if want := os.Getegid(); gid != want {
-			t.Errorf("uidGidFromFileInfo gid: got %v, want %v", gid, want)
+		if want := os.Getegid(); attrs.GID != want {
+			t.Errorf("FileAttrsFromFileInfo gid: got %v, want %v", attrs.GID, want)
 		}
 	})
 }

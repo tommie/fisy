@@ -145,13 +145,13 @@ func (fs *COW) Keep(path Path) error {
 	if err != nil {
 		return err
 	}
-	uid, gid, err := uidGidFromFileInfo(fi)
-	if err != nil {
-		return err
+	attrs, ok := FileAttrsFromFileInfo(fi)
+	if !ok {
+		return fmt.Errorf("no file attributes for %q", fi.Name())
 	}
 
 	// We force u+w so we can continue working on the directory.
-	return fs.fs.Mkdir(fs.wroot.Resolve(path), fi.Mode()|0200, uid, gid)
+	return fs.fs.Mkdir(fs.wroot.Resolve(path), fi.Mode()|0200, attrs.UID, attrs.GID)
 }
 
 func (fs *COW) Mkdir(path Path, mode os.FileMode, uid, gid int) error {
