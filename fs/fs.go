@@ -1,10 +1,14 @@
 package fs
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
+
+	"github.com/pkg/sftp"
 )
 
 // A ReadableFileSystem can only be read from.
@@ -107,4 +111,19 @@ func (p Path) Resolve(pp Path) Path {
 type FSInfo struct {
 	// FreeSpace describes how many bytes are available for use.
 	FreeSpace uint64
+}
+
+// uidGidFromFileInfo extracts user/group information from a FileInfo.
+func uidGidFromFileInfo(fi os.FileInfo) (uid int, gid int, err error) {
+	if fs, ok := fi.Sys().(*sftp.FileStat); ok {
+		uid = int(fs.UID)
+		gid = int(fs.GID)
+		return
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		uid = int(st.Uid)
+		gid = int(st.Gid)
+		return
+	}
+	return -1, -1, fmt.Errorf("no UID/GID information for %q", fi.Name())
 }

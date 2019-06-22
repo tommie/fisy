@@ -492,6 +492,10 @@ func TestLocalChtimes(t *testing.T) {
 }
 
 func newTestLocal(t *testing.T) (*Local, func()) {
+	return newTestLocalAt(t, "")
+}
+
+func newTestLocalAt(t *testing.T, subdir string) (*Local, func()) {
 	tmpd, err := ioutil.TempDir("", "localfs-")
 	if err != nil {
 		t.Fatalf("TempDir failed: %v", err)
@@ -565,8 +569,15 @@ func newTestLocal(t *testing.T) (*Local, func()) {
 		}
 	}
 
+	root := filepath.Join(tmpd, subdir)
+	if subdir != "" {
+		if err := os.MkdirAll(root, 0755); err != nil {
+			t.Fatalf("MkdirAll(%q) failed: %v", root, err)
+		}
+	}
+
 	for _, de := range testTree() {
-		if err := rec(tmpd, de); err != nil {
+		if err := rec(root, de); err != nil {
 			done()
 			t.Fatalf("testTree creation failed: %v", err)
 		}

@@ -7,11 +7,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg/sftp"
 	"golang.org/x/sync/errgroup"
 )
 
-// COW is a copy-on-write file system.
+// COW is a per-host, timestamped, copy-on-write file system. Its Keep
+// function hardlinks a file from the latest time of the same host, if
+// it exists. Otherwise it takes the latest time of any host.
+//
+// On Finish, the file system writes a "<host>/<time>.complete" file
+// and updates the ".latest" symlinks.
 type COW struct {
 	fs    WriteableFileSystem
 	rroot Path
@@ -26,34 +30,41 @@ const (
 	completeSuffix Path = ".complete"
 )
 
+var ErrHostIsEmpty = errors.New("host must be non-empty")
+
 // NewCOW returns a new copy-on-write file system at the given
-// location, for a given hostname and timestamp.
+// location, for a given hostname and timestamp. The time directory
+// must not exist, and the timestamp must be later than what the
+// ".latest" file points to.
 func NewCOW(fs WriteableFileSystem, host string, t time.Time) (*COW, error) {
 	if host == "" {
-		return nil, errors.New("host must be non-empty")
+		return nil, ErrHostIsEmpty
 	}
 
 	ts := Path(t.Format("2006-01-02T15-04-05.000000"))
 	rdir, err := fs.Readlink(Path(host).Resolve(latestPath))
-	if IsNotExist(err) {
+	if err == nil {
+		rdir = Path(host).Resolve(rdir)
+	} else if IsNotExist(err) {
 		rdir, err = fs.Readlink(latestPath)
 		if IsNotExist(err) {
-			rdir = ts
+			rdir = Path(host).Resolve(ts)
 		} else if err != nil {
 			return nil, err
 		}
 	}
-	if ts < rdir {
+	if ts < rdir.Base() {
 		return nil, fmt.Errorf("there is a newer timestamp already: new %v, existing %v", ts, rdir)
 	}
 
 	return &COW{
 		fs:    fs,
-		rroot: Path(host).Resolve(rdir),
+		rroot: rdir,
 		wroot: Path(host).Resolve(ts),
 	}, nil
 }
 
+// init creates the host/time directories if they don't exist.
 func (fs *COW) init() error {
 	fs.initOnce.Do(func() {
 		fs.initGroup.Go(func() error {
@@ -70,6 +81,9 @@ func (fs *COW) init() error {
 	return fs.initGroup.Wait()
 }
 
+// atomicSymlink creates a symlink in an atomic
+// way. (sftp.Client.Symlink doesn't allow overwriting existing files,
+// but PosixRename does.)
 func (fs *COW) atomicSymlink(oldpath Path, newpath Path) error {
 	tmp := newpath.Dir().Resolve(".new")
 	if err := fs.fs.Symlink(oldpath, tmp); err != nil {
@@ -131,11 +145,9 @@ func (fs *COW) Keep(path Path) error {
 	if err != nil {
 		return err
 	}
-	uid := -1
-	gid := -1
-	if fs, ok := fi.Sys().(*sftp.FileStat); ok {
-		uid = int(fs.UID)
-		gid = int(fs.GID)
+	uid, gid, err := uidGidFromFileInfo(fi)
+	if err != nil {
+		return err
 	}
 
 	// We force u+w so we can continue working on the directory.
