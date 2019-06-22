@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"os"
 	"sync"
 	"syscall"
 
@@ -30,20 +31,19 @@ func newLinkSet() linkSet {
 	}
 }
 
-// Offer tells the link set that this file exists. The filePair is
-// updated with linkToInode. The file is recorded as interesting if it
-// has more than one link.
-func (set *linkSet) Offer(fp *filePair) {
-	if fp.src == nil || fp.src.IsDir() {
-		return
+// Offer tells the link set that this file exists. The file is
+// recorded as interesting if it has more than one link. The inode of
+// the source file is returned if interesting. Otherwise zero is
+// returned.
+func (set *linkSet) Offer(src os.FileInfo) uint64 {
+	if src == nil || src.IsDir() {
+		return 0
 	}
 
-	st, ok := fp.src.Sys().(*syscall.Stat_t)
+	st, ok := src.Sys().(*syscall.Stat_t)
 	if !ok || st.Nlink < 2 {
-		return
+		return 0
 	}
-
-	fp.linkToInode = st.Ino
 
 	set.c.L.Lock()
 	defer set.c.L.Unlock()
@@ -53,6 +53,8 @@ func (set *linkSet) Offer(fp *filePair) {
 			nlink: int(st.Nlink),
 		}
 	}
+
+	return st.Ino
 }
 
 // Len returns the current size of the set.
@@ -63,25 +65,25 @@ func (set *linkSet) Len() int {
 }
 
 // Fulfill informs the link set that the destination file is now ready.
-func (set *linkSet) Fulfill(fp *filePair) {
+func (set *linkSet) Fulfill(inode uint64) {
 	set.c.L.Lock()
 	defer set.c.L.Unlock()
 
 	// If we failed to upload, this will cause other transfers to
 	// fail as well.
-	set.inodes[fp.linkToInode].uploaded = true
-	set.inodes[fp.linkToInode].nlink--
+	set.inodes[inode].uploaded = true
+	set.inodes[inode].nlink--
 	set.c.Broadcast()
 }
 
 // Discard removes a file from the set. Use this if the initial file
 // transfer failed. This lets another goroutine take over transfer.
-func (set *linkSet) Discard(fp *filePair) {
+func (set *linkSet) Discard(inode uint64, path fs.Path) {
 	set.c.L.Lock()
 	defer set.c.L.Unlock()
 
-	if set.inodes[fp.linkToInode].path == fp.path {
-		set.inodes[fp.linkToInode].path = ""
+	if set.inodes[inode].path == path {
+		set.inodes[inode].path = ""
 	}
 	set.c.Broadcast()
 }
@@ -89,26 +91,26 @@ func (set *linkSet) Discard(fp *filePair) {
 // FinishedLinkPath returns the path of a finished destination
 // file. It blocks until the file is ready. If this returns empty, it
 // means the source file must be transferred.
-func (set *linkSet) FinishedLinkPath(fp *filePair) fs.Path {
+func (set *linkSet) FinishedLinkPath(inode uint64, path fs.Path) fs.Path {
 	set.c.L.Lock()
 	defer set.c.L.Unlock()
 
-	for !set.inodes[fp.linkToInode].uploaded {
-		if set.inodes[fp.linkToInode].path == "" {
+	for !set.inodes[inode].uploaded {
+		if set.inodes[inode].path == "" {
 			// We are the first one here, or the previous
 			// file was discarded.
-			set.inodes[fp.linkToInode].path = fp.path
+			set.inodes[inode].path = path
 			return ""
 		}
 		set.c.Wait()
 	}
 
-	firstPath := set.inodes[fp.linkToInode].path
+	firstPath := set.inodes[inode].path
 
-	set.inodes[fp.linkToInode].nlink--
-	if set.inodes[fp.linkToInode].nlink == 0 {
+	set.inodes[inode].nlink--
+	if set.inodes[inode].nlink == 0 {
 		// Clean up. We don't need this in memory anymore.
-		delete(set.inodes, fp.linkToInode)
+		delete(set.inodes, inode)
 	}
 
 	return firstPath
