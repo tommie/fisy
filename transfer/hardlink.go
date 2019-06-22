@@ -3,7 +3,6 @@ package transfer
 import (
 	"os"
 	"sync"
-	"syscall"
 
 	"github.com/tommie/fisy/fs"
 )
@@ -127,16 +126,16 @@ func (set *linkSet) offerLocked(src os.FileInfo) uint64 {
 		return 0
 	}
 
-	st, ok := src.Sys().(*syscall.Stat_t)
-	if !ok || st.Nlink < 2 {
+	attrs, ok := fs.FileAttrsFromFileInfo(src)
+	if !ok || attrs.NLinks < 2 {
 		return 0
 	}
 
-	if _, ok := set.inodes[st.Ino]; !ok {
-		set.inodes[st.Ino] = &inodeInfo{
-			nlink: int(st.Nlink),
+	if _, ok := set.inodes[attrs.Inode]; !ok {
+		set.inodes[attrs.Inode] = &inodeInfo{
+			nlink: int(attrs.NLinks),
 		}
 	}
 
-	return st.Ino
+	return attrs.Inode
 }
