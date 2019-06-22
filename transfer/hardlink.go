@@ -7,17 +7,22 @@ import (
 	"github.com/tommie/fisy/fs"
 )
 
+// linkSet contains a map of source inode information. It is used to
+// ensure only one goroutine creates an inode, and other goroutines
+// are blocking until it's done.
 type linkSet struct {
 	inodes map[uint64]*inodeInfo
 	c      *sync.Cond
 }
 
+// An inodeInfo contains information about a single source inode.
 type inodeInfo struct {
 	path     fs.Path
 	uploaded bool
 	nlink    int
 }
 
+// newLinkSet creates a new, empty, link set.
 func newLinkSet() linkSet {
 	return linkSet{
 		inodes: map[uint64]*inodeInfo{},
@@ -25,6 +30,9 @@ func newLinkSet() linkSet {
 	}
 }
 
+// Offer tells the link set that this file exists. The filePair is
+// updated with linkToInode. The file is recorded as interesting if it
+// has more than one link.
 func (set *linkSet) Offer(fp *filePair) {
 	if fp.src == nil || fp.src.IsDir() {
 		return
@@ -47,12 +55,14 @@ func (set *linkSet) Offer(fp *filePair) {
 	}
 }
 
+// Len returns the current size of the set.
 func (set *linkSet) Len() int {
 	set.c.L.Lock()
 	defer set.c.L.Unlock()
 	return len(set.inodes)
 }
 
+// Fulfill informs the link set that the destination file is now ready.
 func (set *linkSet) Fulfill(fp *filePair) {
 	set.c.L.Lock()
 	defer set.c.L.Unlock()
@@ -64,6 +74,8 @@ func (set *linkSet) Fulfill(fp *filePair) {
 	set.c.Broadcast()
 }
 
+// Discard removes a file from the set. Use this if the initial file
+// transfer failed. This lets another goroutine take over transfer.
 func (set *linkSet) Discard(fp *filePair) {
 	set.c.L.Lock()
 	defer set.c.L.Unlock()
@@ -74,6 +86,9 @@ func (set *linkSet) Discard(fp *filePair) {
 	set.c.Broadcast()
 }
 
+// FinishedLinkPath returns the path of a finished destination
+// file. It blocks until the file is ready. If this returns empty, it
+// means the source file must be transferred.
 func (set *linkSet) FinishedLinkPath(fp *filePair) fs.Path {
 	set.c.L.Lock()
 	defer set.c.L.Unlock()
