@@ -41,8 +41,10 @@ func (p *process) process(ctx context.Context, fp *filePair) ([]*filePair, error
 	atomic.AddUint32(&p.stats.InProgress, 1)
 	defer atomic.AddUint32(&p.stats.InProgress, ^uint32(0))
 
+	isDir := fp.FileInfo().Mode().IsDir()
+
 	if fp.src != nil {
-		if fp.src.IsDir() {
+		if isDir {
 			atomic.AddUint64(&p.stats.SourceDirectories, 1)
 		} else {
 			atomic.AddUint64(&p.stats.SourceBytes, uint64(fp.src.Size()))
@@ -50,7 +52,6 @@ func (p *process) process(ctx context.Context, fp *filePair) ([]*filePair, error
 		}
 	}
 
-	isDir := fp.FileInfo().IsDir()
 	filterPath := "/" + fp.path
 	if isDir {
 		filterPath += "/"
@@ -67,7 +68,10 @@ func (p *process) process(ctx context.Context, fp *filePair) ([]*filePair, error
 
 	var fps []*filePair
 	var eg errgroup.Group
-	if fp.src != nil && fp.src.IsDir() {
+	if fp.src != nil && isDir {
+		// There is no need to list the directory if it was
+		// removed, since using RemoveAll can be more
+		// efficient than doing it recursively here.
 		eg.Go(func() error {
 			var err error
 			fps, err = p.listDir(fp.path)
@@ -149,8 +153,8 @@ func (p *process) listDir(path fs.Path) ([]*filePair, error) {
 	// since directories may add more in-memory data. Later files
 	// in fps will be worked on earlier.
 	sort.Slice(fps, func(i, j int) bool {
-		idir := fps[i].FileInfo().IsDir()
-		jdir := fps[j].FileInfo().IsDir()
+		idir := fps[i].FileInfo().Mode().IsDir()
+		jdir := fps[j].FileInfo().Mode().IsDir()
 		if idir != jdir {
 			// If i is a directory, then it is "less".
 			return idir
