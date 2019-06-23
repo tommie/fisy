@@ -122,7 +122,7 @@ func (set *linkSet) FinishedFile(path fs.Path, src os.FileInfo) (uint64, fs.Path
 // the source file is returned if interesting. Otherwise zero is
 // returned.
 func (set *linkSet) offerLocked(src os.FileInfo) uint64 {
-	if src == nil || src.IsDir() {
+	if src == nil || src.Mode().IsDir() {
 		return 0
 	}
 

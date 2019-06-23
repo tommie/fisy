@@ -72,7 +72,7 @@ func (u *Upload) transfer(ctx context.Context, fp *filePair) error {
 	return remote.Idempotent(ctx, func() error {
 		u.stats.lastPath.Store(fp)
 
-		if fp.FileInfo().IsDir() {
+		if fp.FileInfo().Mode().IsDir() {
 			return u.transferDirectory(fp)
 		}
 
@@ -122,7 +122,7 @@ func (u *Upload) transferFile(fp *filePair) error {
 
 // needsTransfer returns true if the source and destination as different.
 func needsTransfer(dest, src os.FileInfo) bool {
-	if dest.IsDir() {
+	if dest.Mode().IsDir() {
 		// We force u+w so we can continue working on the directory.
 		return dest.Mode()&commonModeMask&^0200 != src.Mode()&commonModeMask&^0200
 	}
