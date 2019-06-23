@@ -81,6 +81,11 @@ func (p *process) process(ctx context.Context, fp *filePair) ([]*filePair, error
 	eg.Go(func() error {
 		err := p.transfer(ctx, fp)
 		if err != nil {
+			if isDir {
+				atomic.AddUint64(&p.stats.FailedDirectories, 1)
+			} else {
+				atomic.AddUint64(&p.stats.FailedFiles, 1)
+			}
 			glog.Errorf("Failed to transfer %q: %v", fp.path, err)
 			glog.V(1).Infof("Source: %+v\nDestination: %+v", fp.src, fp.dest)
 		}
@@ -186,6 +191,9 @@ type ProcessStats struct {
 
 	IgnoredFiles       uint64
 	IgnoredDirectories uint64
+
+	FailedFiles       uint64
+	FailedDirectories uint64
 }
 
 // CopyFrom does atomic reads from source, and assigns to the receiver.
@@ -196,4 +204,6 @@ func (ps *ProcessStats) CopyFrom(src *ProcessStats) {
 	ps.SourceDirectories = atomic.LoadUint64(&src.SourceDirectories)
 	ps.IgnoredFiles = atomic.LoadUint64(&src.IgnoredFiles)
 	ps.IgnoredDirectories = atomic.LoadUint64(&src.IgnoredDirectories)
+	ps.FailedFiles = atomic.LoadUint64(&src.FailedFiles)
+	ps.FailedDirectories = atomic.LoadUint64(&src.FailedDirectories)
 }
