@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"sync/atomic"
@@ -33,7 +34,7 @@ func NewUpload(dest fs.WriteableFileSystem, src fs.ReadableFileSystem, opts ...U
 		srcLinks: newLinkSet(),
 
 		stats: UploadStats{
-			lastPath: &atomic.Value{},
+			lastPair: &atomic.Value{},
 		},
 	}
 	u.process.stats = &u.stats.ProcessStats
@@ -69,8 +70,15 @@ func WithConcurrency(nconc int) UploadOpt {
 // Transfer ensures a single file or directory has been fully
 // transferred. It may do retries in case of failure.
 func (u *Upload) transfer(ctx context.Context, fp *filePair) error {
+	var nattempts int
+
 	return remote.Idempotent(ctx, func() error {
-		u.stats.lastPath.Store(fp)
+		u.stats.lastPair.Store(fp)
+
+		nattempts++
+		if nattempts > 1 {
+			atomic.AddUint64(&u.stats.TransferRetries, 1)
+		}
 
 		if fp.FileInfo().Mode().IsDir() {
 			return u.transferDirectory(fp)
@@ -80,13 +88,18 @@ func (u *Upload) transfer(ctx context.Context, fp *filePair) error {
 	})
 }
 
+var errDiscarded = errors.New("file discarded")
+
 // transferFile transfers a single file from source to dest.
-func (u *Upload) transferFile(fp *filePair) error {
+func (u *Upload) transferFile(fp *filePair) (rerr error) {
 	if fp.src == nil {
 		// Removed file.
 		glog.V(1).Infof("Removing file %q...", fp.path)
+		if err := u.dest.Remove(fp.path); err != nil {
+			return err
+		}
 		atomic.AddUint64(&u.stats.RemovedFiles, 1)
-		return u.dest.Remove(fp.path)
+		return nil
 	}
 
 	inode, firstPath := u.srcLinks.FinishedFile(fp.path, fp.src)
@@ -97,10 +110,19 @@ func (u *Upload) transferFile(fp *filePair) error {
 			return u.dest.Link(firstPath, fp.path)
 		}
 
-		defer u.srcLinks.Fulfill(inode)
+		defer func() {
+			if rerr != nil {
+				u.srcLinks.Discard(inode, fp.path)
+			} else {
+				u.srcLinks.Fulfill(inode)
+			}
+			if rerr == errDiscarded {
+				rerr = nil
+			}
+		}()
 	}
 
-	if fp.dest != nil && !needsTransfer(fp.dest, fp.src) {
+	if !fileNeedsTransfer(fp.dest, fp.src) {
 		glog.V(1).Infof("Keeping file %q...", fp.path)
 		if err := u.dest.Keep(fp.path); err == nil {
 			atomic.AddUint64(&u.stats.KeptBytes, uint64(fp.dest.Size()))
@@ -114,31 +136,34 @@ func (u *Upload) transferFile(fp *filePair) error {
 	}
 
 	if fp.src.Mode()&os.ModeSymlink != 0 {
-		return u.createSymlink(fp, inode)
+		return u.createSymlink(fp)
 	}
 
-	return u.copyFile(fp, inode)
+	return u.copyFile(fp)
 }
 
-// needsTransfer returns true if the source and destination as different.
-func needsTransfer(dest, src os.FileInfo) bool {
-	if dest.Mode().IsDir() {
-		// We force u+w so we can continue working on the directory.
-		return dest.Mode()&commonModeMask&^0200 != src.Mode()&commonModeMask&^0200
+// fileNeedsTransfer returns true if the source and destination as different.
+func fileNeedsTransfer(dest, src os.FileInfo) bool {
+	if dest == nil {
+		return true
+	}
+	md := dest.ModTime().Sub(src.ModTime())
+	if md < 0 {
+		md = -md
 	}
 	return dest.Size() != src.Size() ||
 		dest.Mode()&commonModeMask != src.Mode()&commonModeMask ||
-		!dest.ModTime().Truncate(time.Second).Equal(src.ModTime().Truncate(time.Second))
+		md > 1*time.Second
 }
 
-func (u *Upload) createSymlink(fp *filePair, inode uint64) error {
+func (u *Upload) createSymlink(fp *filePair) error {
 	linkdest, err := u.src.Readlink(fp.path)
-	if fs.IsNotExist(err) {
-		// The symlink was removed between listing and transferring.
-		u.srcLinks.Discard(inode, fp.path)
-		atomic.AddUint64(&u.stats.DiscardedFiles, 1)
-		return nil
-	} else if err != nil {
+	if err != nil {
+		if fs.IsNotExist(err) {
+			// The symlink was removed between listing and transferring.
+			atomic.AddUint64(&u.stats.DiscardedFiles, 1)
+			return errDiscarded
+		}
 		return err
 	}
 	glog.V(1).Infof("Symlinking %q to %q...", fp.path, linkdest)
@@ -148,66 +173,68 @@ func (u *Upload) createSymlink(fp *filePair, inode uint64) error {
 }
 
 // copyFile copies a file byte-by-byte.
-func (u *Upload) copyFile(fp *filePair, inode uint64) error {
+func (u *Upload) copyFile(fp *filePair) error {
 	sf, err := u.src.Open(fp.path)
-	if fs.IsNotExist(err) {
-		// The file was removed between listing and transferring.
-		u.srcLinks.Discard(inode, fp.path)
-		atomic.AddUint64(&u.stats.DiscardedFiles, 1)
-		return nil
-	} else if err != nil {
+	if err != nil {
+		if fs.IsNotExist(err) {
+			// The file was removed between listing and transferring.
+			atomic.AddUint64(&u.stats.DiscardedFiles, 1)
+			return errDiscarded
+		}
 		return err
 	}
 	defer sf.Close()
 
 	df, err := u.dest.Create(fp.path)
 	if fs.IsPermission(err) {
+		// Remove the destination file and try again.
 		u.dest.Remove(fp.path)
 		df, err = u.dest.Create(fp.path)
-		if err != nil {
-			return err
-		}
-	} else if err != nil {
+	}
+	if err != nil {
 		return err
 	}
 
-	atime := fp.src.ModTime()
+	var uploadedBytes uint64
 	err = func() error {
-		if err := df.Chmod(fp.src.Mode() & commonModeMask); err != nil {
-			return err
-		}
-
-		glog.V(1).Infof("Uploading file %q (%d bytes)...", fp.path, fp.src.Size())
-		_, err = io.Copy(df, sf)
-		if err != nil {
-			return err
-		}
-
-		if attrs, ok := fs.FileAttrsFromFileInfo(fp.src); ok {
-			if err := df.Chown(attrs.UID, attrs.GID); err != nil {
+		atime := fp.src.ModTime()
+		err := func() error {
+			if err := df.Chmod(fp.src.Mode() & commonModeMask); err != nil {
 				return err
 			}
-			atime = attrs.AccessTime
+
+			glog.V(1).Infof("Uploading file %q (%d bytes)...", fp.path, fp.src.Size())
+			i, err := io.Copy(df, sf)
+			if err != nil {
+				return err
+			}
+			uploadedBytes = uint64(i)
+
+			if attrs, ok := fs.FileAttrsFromFileInfo(fp.src); ok {
+				if err := df.Chown(attrs.UID, attrs.GID); err != nil {
+					return err
+				}
+				atime = attrs.AccessTime
+			}
+			return nil
+		}()
+		if err != nil {
+			df.Close()
+			return err
 		}
-		return nil
+
+		if err := df.Close(); err != nil {
+			return err
+		}
+
+		return u.dest.Chtimes(fp.path, atime, fp.src.ModTime())
 	}()
 	if err != nil {
-		df.Close()
 		u.dest.Remove(fp.path)
 		return err
 	}
 
-	if err := df.Close(); err != nil {
-		u.dest.Remove(fp.path)
-		return err
-	}
-
-	if err := u.dest.Chtimes(fp.path, atime, fp.src.ModTime()); err != nil {
-		u.dest.Remove(fp.path)
-		return err
-	}
-
-	atomic.AddUint64(&u.stats.UploadedBytes, uint64(fp.src.Size()))
+	atomic.AddUint64(&u.stats.UploadedBytes, uploadedBytes)
 	atomic.AddUint64(&u.stats.UploadedFiles, 1)
 
 	return nil
@@ -218,11 +245,14 @@ func (u *Upload) transferDirectory(fp *filePair) error {
 	if fp.src == nil {
 		// Removed directory.
 		glog.V(1).Infof("Removing directory %q...", fp.path)
+		if err := u.dest.RemoveAll(fp.path); err != nil {
+			return err
+		}
 		atomic.AddUint64(&u.stats.RemovedDirectories, 1)
-		return u.dest.RemoveAll(fp.path)
+		return nil
 	}
 
-	if fp.dest != nil && !needsTransfer(fp.dest, fp.src) {
+	if !directoryNeedsTransfer(fp.dest, fp.src) {
 		glog.V(1).Infof("Keeping directory %q...", fp.path)
 		if err := u.dest.Keep(fp.path); err == nil {
 			atomic.AddUint64(&u.stats.KeptDirectories, 1)
@@ -235,6 +265,12 @@ func (u *Upload) transferDirectory(fp *filePair) error {
 	}
 
 	return u.makeDirectory(fp)
+}
+
+// directoryNeedsTransfer returns true if the source and destination as different.
+func directoryNeedsTransfer(dest, src os.FileInfo) bool {
+	// We force u+w so we can continue working on the directory.
+	return dest == nil || dest.Mode()&commonModeMask&^0200 != src.Mode()&commonModeMask&^0200
 }
 
 func (u *Upload) makeDirectory(fp *filePair) error {
@@ -283,9 +319,10 @@ func (u *Upload) Stats() UploadStats {
 		RemovedFiles:       atomic.LoadUint64(&u.stats.RemovedFiles),
 		RemovedDirectories: atomic.LoadUint64(&u.stats.RemovedDirectories),
 
-		DiscardedFiles: atomic.LoadUint64(&u.stats.DiscardedFiles),
+		DiscardedFiles:  atomic.LoadUint64(&u.stats.DiscardedFiles),
+		TransferRetries: atomic.LoadUint64(&u.stats.TransferRetries),
 
-		lastPath: u.stats.lastPath,
+		lastPair: u.stats.lastPair,
 	}
 	us.ProcessStats.CopyFrom(&u.stats.ProcessStats)
 	return us
@@ -310,14 +347,15 @@ type UploadStats struct {
 	RemovedFiles       uint64
 	RemovedDirectories uint64
 
-	DiscardedFiles uint64
+	DiscardedFiles  uint64
+	TransferRetries uint64
 
-	lastPath *atomic.Value // *filePath
+	lastPair *atomic.Value // *filePair
 }
 
 // LastPath returns the last path the upload transfer touched.
 func (us *UploadStats) LastPath() string {
-	if fp, ok := us.lastPath.Load().(*filePair); ok {
+	if fp, ok := us.lastPair.Load().(*filePair); ok {
 		return string(fp.path)
 	}
 	return ""
@@ -326,7 +364,7 @@ func (us *UploadStats) LastPath() string {
 // LastFileOperation returns the type of operation that was last
 // performed.
 func (us *UploadStats) LastFileOperation() FileOperation {
-	if fp, ok := us.lastPath.Load().(*filePair); ok {
+	if fp, ok := us.lastPair.Load().(*filePair); ok {
 		switch {
 		case fp.src != nil && fp.dest != nil:
 			return Keep

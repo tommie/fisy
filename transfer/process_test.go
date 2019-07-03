@@ -3,9 +3,11 @@ package transfer
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/tommie/fisy/fs"
 )
@@ -207,14 +209,14 @@ func TestProcessListDir(t *testing.T) {
 
 func TestProcessStats(t *testing.T) {
 	want := ProcessStats{
-		InProgress: 1,
-		SourceBytes: 2,
-		SourceFiles: 3,
-		SourceDirectories: 4,
-		IgnoredFiles: 5,
+		InProgress:         1,
+		SourceBytes:        2,
+		SourceFiles:        3,
+		SourceDirectories:  4,
+		IgnoredFiles:       5,
 		IgnoredDirectories: 6,
-		FailedFiles: 7,
-		FailedDirectories: 8,
+		FailedFiles:        7,
+		FailedDirectories:  8,
 	}
 
 	var got ProcessStats
@@ -230,32 +232,32 @@ func newTestProcess() process {
 		src: &fakeListingFileSystem{
 			fis: map[fs.Path][]os.FileInfo{
 				".": []os.FileInfo{
-					&fakeListingFileInfo{name: "file1", mode: 0},
+					&fakeListingFileInfo{name: "file1", mode: 0, size: 42},
 					&fakeListingFileInfo{name: "dir1", mode: os.ModeDir},
 					&fakeListingFileInfo{name: "dir2", mode: os.ModeDir},
 				},
 				"dir1": []os.FileInfo{
-					&fakeListingFileInfo{name: "file-new", mode: 0},
-					&fakeListingFileInfo{name: "new-file", mode: 0},
-					&fakeListingFileInfo{name: "file2", mode: 0},
+					&fakeListingFileInfo{name: "file-new", mode: 0, size: 42},
+					&fakeListingFileInfo{name: "new-file", mode: 0, size: 42},
+					&fakeListingFileInfo{name: "file2", mode: 0, size: 42},
 				},
 				"dir2": []os.FileInfo{
-					&fakeListingFileInfo{name: "file3", mode: 0},
+					&fakeListingFileInfo{name: "file3", mode: 0, size: 42},
 				},
 			},
 		},
 		dest: &fakeListingFileSystem{
 			fis: map[fs.Path][]os.FileInfo{
 				".": []os.FileInfo{
-					&fakeListingFileInfo{name: "file1", mode: 0},
+					&fakeListingFileInfo{name: "file1", mode: 0, size: 42},
 					&fakeListingFileInfo{name: "dir2", mode: os.ModeDir},
 					&fakeListingFileInfo{name: "dir1", mode: os.ModeDir},
 				},
 				"dir1": []os.FileInfo{
-					&fakeListingFileInfo{name: "file2", mode: 0},
+					&fakeListingFileInfo{name: "file2", mode: 0, size: 42},
 				},
 				"dir2": []os.FileInfo{
-					&fakeListingFileInfo{name: "file-removed", mode: 0},
+					&fakeListingFileInfo{name: "file-removed", mode: 0, size: 42},
 					&fakeListingFileInfo{name: "removed-file", mode: 0},
 				},
 			},
@@ -271,21 +273,38 @@ func newTestProcess() process {
 type fakeListingFileSystem struct {
 	fs.WriteableFileSystem
 
-	fis map[fs.Path][]os.FileInfo
+	fis  map[fs.Path][]os.FileInfo
+	data map[fs.Path][]byte
 }
 
 func (fs *fakeListingFileSystem) Open(path fs.Path) (fs.FileReader, error) {
-	return &fakeListingFileReader{fis: fs.fis[path]}, nil
+	return &fakeListingFileReader{fis: fs.fis[path], data: fs.data[path]}, nil
 }
 
 type fakeListingFileReader struct {
 	fs.FileReader
 
-	fis []os.FileInfo
+	fis  []os.FileInfo
+	data []byte
 }
 
 func (fr *fakeListingFileReader) Close() error {
 	return nil
+}
+
+func (fr *fakeListingFileReader) Read(bs []byte) (int, error) {
+	if len(fr.data) == 0 {
+		return 0, io.EOF
+	}
+
+	n := len(bs)
+	if len(fr.data) < n {
+		n = len(fr.data)
+	}
+	copy(bs, fr.data[:n])
+	fr.data = fr.data[n:]
+
+	return n, nil
 }
 
 func (fr *fakeListingFileReader) Readdir() ([]os.FileInfo, error) {
@@ -295,10 +314,14 @@ func (fr *fakeListingFileReader) Readdir() ([]os.FileInfo, error) {
 type fakeListingFileInfo struct {
 	os.FileInfo
 
-	name string
-	mode os.FileMode
+	name  string
+	mode  os.FileMode
+	mtime time.Time
+	size  int64
 }
 
-func (fi *fakeListingFileInfo) Name() string      { return fi.name }
-func (fi *fakeListingFileInfo) Mode() os.FileMode { return fi.mode }
-func (fi *fakeListingFileInfo) Size() int64       { return 42 }
+func (fi *fakeListingFileInfo) Name() string       { return fi.name }
+func (fi *fakeListingFileInfo) Mode() os.FileMode  { return fi.mode }
+func (fi *fakeListingFileInfo) ModTime() time.Time { return fi.mtime }
+func (fi *fakeListingFileInfo) Size() int64        { return fi.size }
+func (fi *fakeListingFileInfo) Sys() interface{}   { return nil }
