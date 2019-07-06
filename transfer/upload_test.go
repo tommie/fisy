@@ -14,10 +14,12 @@ import (
 	"github.com/tommie/fisy/fs"
 )
 
-const ignoredPath fs.Path = "/dir2/"
-
 func TestNewUpload(t *testing.T) {
-	u := newTestUpload()
+	const ignoredPath fs.Path = "/dir2/"
+
+	u := newTestUpload(WithIgnoreFilter(func(path fs.Path) bool {
+		return path == ignoredPath
+	}))
 
 	if got, want := u.process.ignoreFilter(ignoredPath), true; got != want {
 		t.Errorf("NewUpload ignoreFilter(%q): got %v, want %v", ignoredPath, got, want)
@@ -74,6 +76,32 @@ func TestUploadTransfer(t *testing.T) {
 		}
 		if got, want := int(u.stats.UploadedFiles), 1; got != want {
 			t.Errorf("stats.UploadedFiles: got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("fileHook", func(t *testing.T) {
+		var fis []os.FileInfo
+		var ops []FileOperation
+		var errs []error
+		u := newTestUpload(WithFileHook(func(fi os.FileInfo, op FileOperation, err error) {
+			fis = append(fis, fi)
+			ops = append(ops, op)
+			errs = append(errs, err)
+		}))
+
+		src := &fakeListingFileInfo{name: "file1"}
+		if err := u.transfer(ctx, &filePair{path: "file1", src: src}); err != nil {
+			t.Fatalf("transfer failed: %v", err)
+		}
+
+		if want := []os.FileInfo{src, src}; !reflect.DeepEqual(fis, want) {
+			t.Errorf("transfer FileInfo: got %+v, want %+v", fis, want)
+		}
+		if want := []FileOperation{Create, Create}; !reflect.DeepEqual(ops, want) {
+			t.Errorf("transfer FileOperation: got %+v, want %+v", ops, want)
+		}
+		if want := []error{InProgress, nil}; !reflect.DeepEqual(errs, want) {
+			t.Errorf("transfer error: got %+v, want %+v", errs, want)
 		}
 	})
 }
@@ -585,7 +613,8 @@ func TestUploadStats(t *testing.T) {
 	})
 }
 
-func newTestUpload() *Upload {
+func newTestUpload(opts ...UploadOpt) *Upload {
+	opts = append(opts, WithConcurrency(2))
 	return NewUpload(
 		&fakeWriteableFileSystem{
 			fakeListingFileSystem: fakeListingFileSystem{
@@ -634,7 +663,7 @@ func newTestUpload() *Upload {
 					"file3":    make([]byte, 4711),
 				},
 			},
-		}, WithIgnoreFilter(func(path fs.Path) bool { return path == ignoredPath }), WithConcurrency(2))
+		}, opts...)
 }
 
 var errMocked = fmt.Errorf("mocked")

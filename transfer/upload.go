@@ -19,7 +19,8 @@ type Upload struct {
 
 	srcLinks linkSet
 
-	stats UploadStats
+	stats    UploadStats
+	fileHook FileHook
 }
 
 // NewUpload creates a new upload, with the given destination and source.
@@ -35,6 +36,7 @@ func NewUpload(dest fs.WriteableFileSystem, src fs.ReadableFileSystem, opts ...U
 		stats: UploadStats{
 			lastPair: &atomic.Value{},
 		},
+		fileHook: func(os.FileInfo, FileOperation, error) {},
 	}
 	u.process.stats = &u.stats.ProcessStats
 	u.process.transfer = u.transfer
@@ -66,12 +68,22 @@ func WithConcurrency(nconc int) UploadOpt {
 	}
 }
 
+// WithFileHook sets the per-file hook function. This is invoked when
+// a file is starting transfer (with error set to InProgress), and
+// when transfer has completed.
+func WithFileHook(fun FileHook) UploadOpt {
+	return func(u *Upload) {
+		u.fileHook = fun
+	}
+}
+
 // Transfer ensures a single file or directory has been fully
 // transferred. It may do retries in case of failure.
 func (u *Upload) transfer(ctx context.Context, fp *filePair) error {
 	var nattempts int
 
-	return remote.Idempotent(ctx, func() error {
+	u.fileHook(fp.FileInfo(), fp.FileOperation(), InProgress)
+	err := remote.Idempotent(ctx, func() error {
 		u.stats.lastPair.Store(fp)
 
 		nattempts++
@@ -85,6 +97,8 @@ func (u *Upload) transfer(ctx context.Context, fp *filePair) error {
 
 		return u.transferFile(fp)
 	})
+	u.fileHook(fp.FileInfo(), fp.FileOperation(), err)
+	return err
 }
 
 var errDiscarded = errors.New("file discarded")

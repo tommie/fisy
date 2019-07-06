@@ -19,6 +19,14 @@ const (
 	Update               FileOperation = 'U'
 )
 
+// A FileHook is a function that is called with updates about a file
+// transfer.
+type FileHook func(os.FileInfo, FileOperation, error)
+
+// InProgress indicates that the file is being transferred. It's a
+// temporary condition, not an error.
+var InProgress = errors.New("in progress")
+
 // commonModeMask is the non-special mode bits to transfer. Doesn't
 // include file type bits.
 const commonModeMask os.FileMode = 0xFFFFF
