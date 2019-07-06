@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -27,7 +28,7 @@ var transferCmd = cobra.Command{
 }
 
 func init() {
-	transferCmd.PersistentFlags().IntVar(&fileConc, "file-concurrency", 128, "number of files/directories to work on concurrently")
+	transferCmd.PersistentFlags().IntVar(&fileConc, "file-concurrency", runtime.NumCPU()*32, "number of files/directories to work on concurrently")
 	transferCmd.PersistentFlags().StringVar(&ignoreSpec, "ignore", "", "filter to apply to ignore some files")
 
 	rootCmd.AddCommand(&transferCmd)
