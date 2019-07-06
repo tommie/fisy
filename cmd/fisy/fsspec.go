@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,6 +17,10 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
+// makeFileSystem creates a file system from a specification
+// string. Returns the file system and a close function, or an
+// error. The close function takes an error. In some file systems,
+// passing non-nil will cause changes to be rolled back.
 func makeFileSystem(s string) (fs.WriteableFileSystem, func(error) error, error) {
 	u, err := parseFileSystemSpec(s)
 	if err != nil {
@@ -24,7 +29,17 @@ func makeFileSystem(s string) (fs.WriteableFileSystem, func(error) error, error)
 	return makeFileSystemFromURL(u)
 }
 
+// parseFileSystemSpec parses a string into a URL.
+//
+// Valid non-URLs shortcuts are:
+//
+//   <host>:<path>  - A remote SFTP location.
+//   <path>         - A local location.
 func parseFileSystemSpec(s string) (*url.URL, error) {
+	if s == "" {
+		return nil, fmt.Errorf("empty URL")
+	}
+
 	if strings.Contains(s, "://") {
 		return url.Parse(s)
 	}
@@ -37,6 +52,10 @@ func parseFileSystemSpec(s string) (*url.URL, error) {
 	return &url.URL{Scheme: "file", Path: s}, nil
 }
 
+// makeFileSystemFromURL creates a file system. Returns the file
+// system and a close function, or an error. The close function takes
+// an error. In some file systems, passing non-nil will cause changes
+// to be rolled back.
 func makeFileSystemFromURL(u *url.URL) (fs.WriteableFileSystem, func(error) error, error) {
 	if strings.HasPrefix(u.Scheme, "cow+") {
 		uu := *u
@@ -50,7 +69,7 @@ func makeFileSystemFromURL(u *url.URL) (fs.WriteableFileSystem, func(error) erro
 		if err != nil {
 			return nil, nil, err
 		}
-		cfs, err := fs.NewCOW(raw, host, time.Now())
+		cfs, err := fs.NewCOW(raw, host, timeNow())
 		return cfs, func(err error) error {
 			if err == nil {
 				if err := cfs.Finish(); err != nil {
@@ -68,36 +87,57 @@ func makeFileSystemFromURL(u *url.URL) (fs.WriteableFileSystem, func(error) erro
 	case "sftp":
 		host := u.Host
 		if u.Port() == "" {
-			// Note that ":ssh" doesn't work with the sftp
-			// library. It would try to match a host key
-			// named "host:ssh" instead of canonicalizing
-			// it to just "host".
-			host += ":22"
+			host += defaultPortSuffix
 		}
 
-		wfs, close, err := newSFTPFileSystem(host, u.Path)
+		user := os.Getenv("LOGNAME")
+		if u.User != nil {
+			if s := u.User.Username(); s != "" {
+				user = s
+			}
+		}
+		knownHostsPath := filepath.Join(os.Getenv("HOME"), ".ssh/known_hosts")
+		if path := u.Query().Get("knownhosts"); path != "" {
+			knownHostsPath = path
+		}
+		agentSockPath := os.Getenv("SSH_AUTH_SOCK")
+		if path := u.Query().Get("authsock"); path != "" {
+			agentSockPath = path
+		}
+		sftpc, err := remote.NewReconnectingSFTPClient(sftpClientDialler(host, user, knownHostsPath, agentSockPath))
 		if err != nil {
 			return nil, nil, err
 		}
-		return wfs, func(error) error { return close() }, nil
+		return fs.NewSFTP(sftpc, fs.Path(u.Path)), func(error) error { return sftpc.Close() }, nil
 
 	default:
 		return nil, nil, fmt.Errorf("unknown URL scheme: %s", u.Scheme)
 	}
 }
 
-func newSFTPFileSystem(host, path string) (fs.WriteableFileSystem, func() error, error) {
-	dial := func() (remote.CloseableSFTPClient, error) {
-		hkcb, err := knownhosts.New(os.ExpandEnv("$HOME/.ssh/known_hosts"))
+var (
+	// Note that ":ssh" doesn't work with the sftp library. It
+	// would try to match a host key named "host:ssh" instead of
+	// canonicalizing it to just "host".
+	defaultPortSuffix = ":22"
+
+	// timeNow is a mock injection point.
+	timeNow = time.Now
+)
+
+// sftpClientDialler returns a dialler that can connect to the given host.
+func sftpClientDialler(host, user, knownHostsPath, agentSockPath string) func() (remote.CloseableSFTPClient, error) {
+	return func() (remote.CloseableSFTPClient, error) {
+		hkcb, err := knownhosts.New(knownHostsPath)
 		if err != nil {
 			return nil, err
 		}
-		agentConn, err := net.Dial("unix", os.Getenv("SSH_AUTH_SOCK"))
+		agentConn, err := net.Dial("unix", agentSockPath)
 		if err != nil {
 			return nil, err
 		}
 		cfg := ssh.ClientConfig{
-			User: os.Getenv("LOGNAME"),
+			User: user,
 			Auth: []ssh.AuthMethod{
 				ssh.PublicKeysCallback(agent.NewClient(agentConn).Signers),
 			},
@@ -123,21 +163,18 @@ func newSFTPFileSystem(host, path string) (fs.WriteableFileSystem, func() error,
 			},
 		}, nil
 	}
-
-	sftpc, err := remote.NewReconnectingSFTPClient(dial)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return fs.NewSFTP(sftpc, fs.Path(path)), sftpc.Close, nil
 }
 
+// A connectSFTPClient is an SFTP client that can close multiple
+// things. This is needed because sftp.Client doesn't necessarily
+// close the ssh.Client and agent connection.
 type connectedSFTPClient struct {
 	*sftp.Client
 
 	closers []func() error
 }
 
+// close runs Client.Close and then all the other closers.
 func (c connectedSFTPClient) Close() error {
 	if err := c.Client.Close(); err != nil {
 		return err
