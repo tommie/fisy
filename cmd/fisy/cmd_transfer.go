@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/golang/glog"
@@ -60,7 +61,7 @@ func runTransfer(ctx context.Context, cmd *cobra.Command, srcSpec, destSpec stri
 	start := time.Now()
 	u := transfer.NewUpload(dest, src, transfer.WithIgnoreFilter(filter), transfer.WithConcurrency(fileConc))
 
-	go RunProgress(ctx, u)
+	go RunProgress(ctx, os.Stdout, u)
 
 	if err := u.Run(ctx); err != nil {
 		cancel()

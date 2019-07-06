@@ -11,8 +11,8 @@ import (
 	"golang.org/x/crypto/ssh/terminal"
 )
 
-func RunProgress(ctx context.Context, u *transfer.Upload) {
-	fd := int(os.Stdout.Fd())
+func RunProgress(ctx context.Context, out *os.File, u *transfer.Upload) {
+	fd := int(out.Fd())
 	if !terminal.IsTerminal(fd) {
 		return
 	}
@@ -36,22 +36,22 @@ func RunProgress(ctx context.Context, u *transfer.Upload) {
 			// Continue
 		}
 
-		showStats(u, tw)
+		showStats(out, u, tw)
 		printed = true
 	}
 
 	if printed {
-		fmt.Println()
+		fmt.Fprintln(out)
 	}
 }
 
-func showStats(u *transfer.Upload, maxLength int) {
+func showStats(out *os.File, u *transfer.Upload, maxLength int) {
 	st := u.Stats()
 	s := fmt.Sprintf("\033[2K%5d / %7s / %d / %d: %c %s\033[1G", st.SourceFiles, "+"+storageBytes(st.UploadedBytes), st.InProgress, st.InodeTable, st.LastFileOperation(), st.LastPath())
 	if len(s) > maxLength {
 		s = s[:maxLength]
 	}
-	fmt.Print(s)
+	fmt.Fprint(out, s)
 }
 
 var storageBytesUnits = []string{
