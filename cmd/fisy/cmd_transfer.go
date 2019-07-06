@@ -2,13 +2,12 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"time"
 
-	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 	"github.com/tommie/fisy/transfer"
+	"github.com/tommie/fisy/transfer/terminal"
 )
 
 var (
@@ -58,10 +57,10 @@ func runTransfer(ctx context.Context, cmd *cobra.Command, srcSpec, destSpec stri
 		destClose(rerr)
 	}()
 
-	start := time.Now()
+	p := terminal.NewProgress(os.Stdout, 1*time.Second)
 	u := transfer.NewUpload(dest, src, transfer.WithIgnoreFilter(filter), transfer.WithConcurrency(fileConc))
 
-	go RunProgress(ctx, os.Stdout, u)
+	go p.RunUpload(ctx, u)
 
 	if err := u.Run(ctx); err != nil {
 		cancel()
@@ -69,14 +68,7 @@ func runTransfer(ctx context.Context, cmd *cobra.Command, srcSpec, destSpec stri
 	}
 	cancel()
 
-	stats := u.Stats()
-	glog.Infof("All done in %v: %+v", time.Now().Sub(start), stats)
-	fmt.Fprintf(
-		cmd.OutOrStdout(),
-		"All done in %v. Uploaded %v in %v file(s). Kept %v in %v file(s).\n",
-		time.Now().Sub(start),
-		storageBytes(stats.UploadedBytes), stats.UploadedFiles,
-		storageBytes(stats.KeptBytes), stats.KeptFiles)
+	p.FinishUpload(u)
 
 	return nil
 }

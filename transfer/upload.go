@@ -362,3 +362,11 @@ func (us *UploadStats) LastFileOperation() FileOperation {
 	}
 	return UnknownFileOperation
 }
+
+// SetLast sets the last operation. This is only used in testing.
+func (us *UploadStats) SetLast(path fs.Path, dest, src os.FileInfo) {
+	if us.lastPair == nil {
+		us.lastPair = &atomic.Value{}
+	}
+	us.lastPair.Store(&filePair{path: path, dest: dest, src: src})
+}
