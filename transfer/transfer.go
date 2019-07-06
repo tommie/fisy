@@ -1,7 +1,9 @@
 package transfer
 
 import (
+	"errors"
 	"os"
+	"time"
 
 	"github.com/tommie/fisy/fs"
 )
@@ -14,6 +16,7 @@ const (
 	Create               FileOperation = 'C'
 	Remove               FileOperation = 'R'
 	Keep                 FileOperation = 'K'
+	Update               FileOperation = 'U'
 )
 
 // commonModeMask is the non-special mode bits to transfer. Doesn't
@@ -35,4 +38,51 @@ func (fp *filePair) FileInfo() os.FileInfo {
 		return fp.src
 	}
 	return fp.dest
+}
+
+// FileOperation returns the type of operation this file pair needs to
+// synchronize.
+func (fp *filePair) FileOperation() FileOperation {
+	switch {
+	case fp.src != nil && fp.dest != nil:
+		if fp.src.Mode().IsDir() {
+			if directoryNeedsTransfer(fp.dest, fp.src) {
+				return Update
+			} else {
+				return Keep
+			}
+		} else {
+			if fileNeedsTransfer(fp.dest, fp.src) {
+				return Update
+			} else {
+				return Keep
+			}
+		}
+	case fp.src != nil:
+		return Create
+	case fp.dest != nil:
+		return Remove
+	default:
+		return UnknownFileOperation
+	}
+}
+
+// fileNeedsTransfer returns true if the source and destination as different.
+func fileNeedsTransfer(dest, src os.FileInfo) bool {
+	if dest == nil {
+		return true
+	}
+	md := dest.ModTime().Sub(src.ModTime())
+	if md < 0 {
+		md = -md
+	}
+	return dest.Size() != src.Size() ||
+		dest.Mode()&commonModeMask != src.Mode()&commonModeMask ||
+		md > 1*time.Second
+}
+
+// directoryNeedsTransfer returns true if the source and destination as different.
+func directoryNeedsTransfer(dest, src os.FileInfo) bool {
+	// We force u+w so we can continue working on the directory.
+	return dest == nil || dest.Mode()&commonModeMask&^0200 != src.Mode()&commonModeMask&^0200
 }

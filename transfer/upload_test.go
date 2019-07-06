@@ -104,7 +104,7 @@ func TestUploadTransferFile(t *testing.T) {
 
 		err := u.transferFile(&filePair{
 			path: "failing-symlink",
-			src:  &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "failing-symlink", mode: os.ModeSymlink|1}, inode: 42},
+			src:  &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "failing-symlink", mode: os.ModeSymlink | 1}, inode: 42},
 			dest: &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "failing-symlink", mode: os.ModeSymlink}},
 		})
 		if want := errMocked; err != want {
@@ -260,31 +260,6 @@ func TestUploadTransferFile(t *testing.T) {
 			t.Errorf("stats.UploadedBytes: got %v, want %v", got, want)
 		}
 	})
-}
-
-func TestUploadFileNeedsTransfer(t *testing.T) {
-	now := time.Now()
-
-	tsts := []struct {
-		Dest, Src os.FileInfo
-		Want      bool
-	}{
-		{&fakeListingFileInfo{}, &fakeListingFileInfo{}, false},
-		{&fakeListingFileInfo{mtime: now.Add(500 * time.Millisecond)}, &fakeListingFileInfo{mtime: now}, false},
-
-		{nil, &fakeListingFileInfo{}, true},
-		{&fakeListingFileInfo{size: 42}, &fakeListingFileInfo{size: 4711}, true},
-		{&fakeListingFileInfo{mode: 42}, &fakeListingFileInfo{mode: 4711}, true},
-		{&fakeListingFileInfo{mtime: now.Add(1500 * time.Millisecond)}, &fakeListingFileInfo{mtime: now}, true},
-		{&fakeListingFileInfo{mtime: now}, &fakeListingFileInfo{mtime: now.Add(1500 * time.Millisecond)}, true},
-	}
-	for _, tst := range tsts {
-		t.Run(fmt.Sprint(tst.Src, "/", tst.Dest), func(t *testing.T) {
-			if fileNeedsTransfer(tst.Dest, tst.Src) != tst.Want {
-				t.Errorf("got %v, want %v", !tst.Want, tst.Want)
-			}
-		})
-	}
 }
 
 func TestUploadCreateSymlink(t *testing.T) {
@@ -553,6 +528,7 @@ func TestUploadTransferDirectory(t *testing.T) {
 		}
 	})
 }
+
 func TestUploadStats(t *testing.T) {
 	t.Run("Stats", func(t *testing.T) {
 		u := newTestUpload()
@@ -604,28 +580,6 @@ func TestUploadStats(t *testing.T) {
 		us.lastPair.Store(&filePair{src: &fakeListingFileInfo{}})
 
 		if want := Create; us.LastFileOperation() != want {
-			t.Errorf("LastFileOperation: got %v, want %v", us.LastPath(), want)
-		}
-	})
-
-	t.Run("lastFileOperationKeep", func(t *testing.T) {
-		us := UploadStats{
-			lastPair: &atomic.Value{},
-		}
-		us.lastPair.Store(&filePair{src: &fakeListingFileInfo{}, dest: &fakeListingFileInfo{}})
-
-		if want := Keep; us.LastFileOperation() != want {
-			t.Errorf("LastFileOperation: got %v, want %v", us.LastPath(), want)
-		}
-	})
-
-	t.Run("lastFileOperationRemove", func(t *testing.T) {
-		us := UploadStats{
-			lastPair: &atomic.Value{},
-		}
-		us.lastPair.Store(&filePair{dest: &fakeListingFileInfo{}})
-
-		if want := Remove; us.LastFileOperation() != want {
 			t.Errorf("LastFileOperation: got %v, want %v", us.LastPath(), want)
 		}
 	})

@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"sync/atomic"
-	"time"
 
 	"github.com/golang/glog"
 	"github.com/tommie/fisy/fs"
@@ -142,20 +141,6 @@ func (u *Upload) transferFile(fp *filePair) (rerr error) {
 	return u.copyFile(fp)
 }
 
-// fileNeedsTransfer returns true if the source and destination as different.
-func fileNeedsTransfer(dest, src os.FileInfo) bool {
-	if dest == nil {
-		return true
-	}
-	md := dest.ModTime().Sub(src.ModTime())
-	if md < 0 {
-		md = -md
-	}
-	return dest.Size() != src.Size() ||
-		dest.Mode()&commonModeMask != src.Mode()&commonModeMask ||
-		md > 1*time.Second
-}
-
 func (u *Upload) createSymlink(fp *filePair) error {
 	linkdest, err := u.src.Readlink(fp.path)
 	if err != nil {
@@ -267,12 +252,6 @@ func (u *Upload) transferDirectory(fp *filePair) error {
 	return u.makeDirectory(fp)
 }
 
-// directoryNeedsTransfer returns true if the source and destination as different.
-func directoryNeedsTransfer(dest, src os.FileInfo) bool {
-	// We force u+w so we can continue working on the directory.
-	return dest == nil || dest.Mode()&commonModeMask&^0200 != src.Mode()&commonModeMask&^0200
-}
-
 func (u *Upload) makeDirectory(fp *filePair) error {
 	attrs, ok := fs.FileAttrsFromFileInfo(fp.src)
 	if !ok {
@@ -365,14 +344,7 @@ func (us *UploadStats) LastPath() string {
 // performed.
 func (us *UploadStats) LastFileOperation() FileOperation {
 	if fp, ok := us.lastPair.Load().(*filePair); ok {
-		switch {
-		case fp.src != nil && fp.dest != nil:
-			return Keep
-		case fp.src != nil:
-			return Create
-		case fp.dest != nil:
-			return Remove
-		}
+		return fp.FileOperation()
 	}
 	return UnknownFileOperation
 }
