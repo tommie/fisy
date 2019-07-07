@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"runtime"
 	"time"
@@ -14,6 +15,7 @@ import (
 var (
 	fileConc   int
 	ignoreSpec string
+	printOps   []string
 )
 
 var transferCmd = cobra.Command{
@@ -30,6 +32,7 @@ var transferCmd = cobra.Command{
 func init() {
 	transferCmd.PersistentFlags().IntVar(&fileConc, "file-concurrency", runtime.NumCPU()*32, "number of files/directories to work on concurrently")
 	transferCmd.PersistentFlags().StringVar(&ignoreSpec, "ignore", "", "filter to apply to ignore some files")
+	transferCmd.PersistentFlags().StringSliceVar(&printOps, "print-operations", nil, "types of file operations to print verbosely (a combination of create, update, keep, remove)")
 
 	rootCmd.AddCommand(&transferCmd)
 }
@@ -58,8 +61,22 @@ func runTransfer(ctx context.Context, cmd *cobra.Command, srcSpec, destSpec stri
 		destClose(rerr)
 	}()
 
+	printOpsMap, err := parsePrintOps(printOps)
+	if err != nil {
+		return err
+	}
+
 	p := terminal.NewProgress(os.Stdout, 1*time.Second)
-	u := transfer.NewUpload(dest, src, transfer.WithIgnoreFilter(filter), transfer.WithConcurrency(fileConc))
+	u := transfer.NewUpload(
+		dest, src,
+		transfer.WithIgnoreFilter(filter),
+		transfer.WithConcurrency(fileConc),
+		transfer.WithFileHook(func(fi os.FileInfo, op transfer.FileOperation, err error) {
+			if !printOpsMap[op] {
+				return
+			}
+			p.FileHook(fi, op, err)
+		}))
 
 	go p.RunUpload(ctx, u)
 
@@ -72,4 +89,24 @@ func runTransfer(ctx context.Context, cmd *cobra.Command, srcSpec, destSpec stri
 	p.FinishUpload(u)
 
 	return nil
+}
+
+// parsePrintOps parses the --print-operations flag into a set of FileOperation.
+func parsePrintOps(ss []string) (map[transfer.FileOperation]bool, error) {
+	ret := make(map[transfer.FileOperation]bool, len(ss))
+	for _, s := range ss {
+		switch s {
+		case "create":
+			ret[transfer.Create] = true
+		case "remove":
+			ret[transfer.Remove] = true
+		case "keep":
+			ret[transfer.Keep] = true
+		case "update":
+			ret[transfer.Update] = true
+		default:
+			return nil, fmt.Errorf("unknown file operation: %s", s)
+		}
+	}
+	return ret, nil
 }

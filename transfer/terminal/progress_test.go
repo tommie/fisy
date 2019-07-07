@@ -90,6 +90,46 @@ func TestNewProgress(t *testing.T) {
 	})
 }
 
+func TestProgressFileHook(t *testing.T) {
+	timeNow = func() time.Time {
+		return time.Date(2006, 2, 3, 15, 4, 5, 0, time.Local)
+	}
+	defer func() {
+		timeNow = time.Now
+	}()
+
+	tsts := []struct {
+		FileInfo os.FileInfo
+		Op       transfer.FileOperation
+		Err      error
+		Printed  bool
+		Want     string
+	}{
+		{&fakeFileInfo{}, transfer.Create, nil, true, "C file\033[K\n\033[1G    1h0m0s /     0 /  +1.0 B / 0: K test\033[K\033[1G"},
+
+		{&fakeFileInfo{}, transfer.Create, fmt.Errorf("mocked"), false, "C file: mocked\033[K\n"},
+		{&fakeFileInfo{}, transfer.Create, transfer.InProgress, false, ""},
+	}
+	for _, tst := range tsts {
+		t.Run(tst.Want, func(t *testing.T) {
+			var out bytes.Buffer
+			p := &Progress{
+				w:     &out,
+				width: 80,
+				start: timeNow().Add(-1 * time.Hour),
+
+				printed: tst.Printed,
+				u:       &fakeUpload{},
+			}
+			p.FileHook(tst.FileInfo, tst.Op, tst.Err)
+
+			if out.String() != tst.Want {
+				t.Errorf("FileHook: got %q, want %q", out.String(), tst.Want)
+			}
+		})
+	}
+}
+
 func TestProgressRunUpload(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -156,8 +196,8 @@ func TestProgressFinishUpload(t *testing.T) {
 	p := &Progress{
 		w:      &out,
 		period: 10 * time.Millisecond,
-		width: 30,
-		start: timeNow().Add(-1 * time.Minute),
+		width:  30,
+		start:  timeNow().Add(-1 * time.Minute),
 	}
 
 	p.FinishUpload(&fakeUpload{})

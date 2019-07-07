@@ -20,7 +20,9 @@ type Progress struct {
 	width  int
 	start  time.Time
 
-	mu sync.Mutex
+	u       Upload
+	printed bool
+	mu      sync.Mutex
 }
 
 // NewProgress creates a new progress reporter. If the writer is not a
@@ -48,6 +50,35 @@ func NewProgress(w io.Writer, period time.Duration) *Progress {
 	}
 }
 
+// FileHook is a transfer.FileHook that lets progress plot
+func (p *Progress) FileHook(fi os.FileInfo, op transfer.FileOperation, err error) {
+	if p.width == 0 {
+		return
+	}
+
+	if err == transfer.InProgress {
+		return
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	s := fmt.Sprintf("%c %s", op, fi.Name())
+	if err != nil {
+		s = fmt.Sprintf("%s: %v", s, err)
+	}
+
+	if len(s) > p.width {
+		s = s[:p.width]
+	}
+	fmt.Fprint(p.w, s, "\033[K\n")
+
+	// Re-render the last status.
+	if p.u != nil && p.printed {
+		p.printUploadStats()
+	}
+}
+
 var (
 	// terminalGetSize is a mock injection point.
 	terminalGetSize = terminal.GetSize
@@ -63,6 +94,17 @@ type Upload interface {
 
 // RunUpload displays progress updates until the context is cancelled.
 func (p *Progress) RunUpload(ctx context.Context, u Upload) {
+	p.mu.Lock()
+	p.u = u
+	p.mu.Unlock()
+	defer func() {
+		p.mu.Lock()
+		if p.u == u {
+			p.u = nil
+		}
+		p.mu.Unlock()
+	}()
+
 	if p.width == 0 {
 		return
 	}
@@ -70,7 +112,6 @@ func (p *Progress) RunUpload(ctx context.Context, u Upload) {
 	t := time.NewTicker(p.period)
 	defer t.Stop()
 
-	var printed bool
 loop:
 	for {
 		select {
@@ -80,18 +121,28 @@ loop:
 			// Continue
 		}
 
-		st := u.Stats()
-		s := p.formatUploadStats(&st)
-		fmt.Fprint(p.w, "\033[1G", s, "\033[K\033[1G")
-		printed = true
+		func() {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			p.printUploadStats()
+			p.printed = true
+		}()
 	}
 
-	if printed {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.printed {
 		fmt.Fprintln(p.w)
 	}
 }
 
-// printUploadStats displays ongoing progress for an Upload.
+// printUploadStats displays ongoing progress for the Upload.
+func (p *Progress) printUploadStats() {
+	st := p.u.Stats()
+	fmt.Fprint(p.w, "\033[1G", p.formatUploadStats(&st), "\033[K\033[1G")
+}
+
+// formatUploadStats renders ongoing progress for UploadStats.
 func (p *Progress) formatUploadStats(st *transfer.UploadStats) string {
 	s := fmt.Sprintf(
 		"%10v / %5d / %7s / %d: %c %s",
@@ -109,6 +160,9 @@ func (p *Progress) formatUploadStats(st *transfer.UploadStats) string {
 
 // FinishUpload writes summary statistics at the end of an upload.
 func (p *Progress) FinishUpload(u Upload) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	stats := u.Stats()
 	glog.Infof("All done in %v: %+v", time.Now().Sub(p.start).Truncate(time.Second), stats)
 	fmt.Fprintf(
