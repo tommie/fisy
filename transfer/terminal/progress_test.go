@@ -112,12 +112,20 @@ func TestProgressRunUpload(t *testing.T) {
 }
 
 func TestProgressFormatUploadStats(t *testing.T) {
+	timeNow = func() time.Time {
+		return time.Date(2006, 2, 3, 15, 4, 5, 0, time.Local)
+	}
+	defer func() {
+		timeNow = time.Now
+	}()
+
 	var out bytes.Buffer
 	p := &Progress{
 		w:      &out,
 		period: 10 * time.Millisecond,
 		// Short enough to cut the string.
-		width: 26,
+		width: 39,
+		start: timeNow().Add(-1 * time.Hour),
 	}
 
 	us := transfer.UploadStats{
@@ -131,7 +139,7 @@ func TestProgressFormatUploadStats(t *testing.T) {
 	us.SetLast("test", &fakeFileInfo{}, nil)
 	got := p.formatUploadStats(&us)
 
-	if want := "    1 /  +2.0 B / 3: R tes"; got != want {
+	if want := "    1h0m0s /     1 /  +2.0 B / 3: R tes"; got != want {
 		t.Errorf("formatUploadStats: got %q, want %q", got, want)
 	}
 }
@@ -148,7 +156,6 @@ func TestProgressFinishUpload(t *testing.T) {
 	p := &Progress{
 		w:      &out,
 		period: 10 * time.Millisecond,
-		// Short enough to cut the string.
 		width: 30,
 		start: timeNow().Add(-1 * time.Minute),
 	}
