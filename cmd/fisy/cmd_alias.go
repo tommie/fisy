@@ -22,8 +22,8 @@ func init() {
 		rootCmd.AddCommand(&cobra.Command{
 			Use:   name,
 			Short: "Alias found in " + path,
-			Args:  cobra.NoArgs,
 			RunE:  runAnAlias,
+			DisableFlagParsing: true,
 		})
 	}
 }
@@ -35,6 +35,7 @@ func runAnAlias(c *cobra.Command, args []string) error {
 	c.Flags().Visit(func(f *pflag.Flag) {
 		flags = append(flags, "--"+f.Name+"="+f.Value.String())
 	})
+	flags = append(flags, args...)
 	executable, err := os.Executable()
 	if err != nil {
 		executable = os.Args[0]
