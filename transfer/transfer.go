@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/golang/glog"
 	"github.com/tommie/fisy/fs"
 )
 
@@ -71,7 +72,8 @@ func (fp *filePair) FileOperation() FileOperation {
 	case fp.dest != nil:
 		return Remove
 	default:
-		return UnknownFileOperation
+		glog.Fatalf("unknown file operation for %+v", fp)
+		panic(nil)
 	}
 }
 

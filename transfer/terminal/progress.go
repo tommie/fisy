@@ -95,7 +95,7 @@ loop:
 func (p *Progress) formatUploadStats(st *transfer.UploadStats) string {
 	s := fmt.Sprintf(
 		"%10v / %5d / %7s / %d: %c %s",
-		timeNow().Sub(p.start),
+		timeNow().Sub(p.start).Truncate(time.Second),
 		st.SourceFiles,
 		"+"+storageBytes(st.UploadedBytes),
 		st.InProgress,
@@ -110,7 +110,7 @@ func (p *Progress) formatUploadStats(st *transfer.UploadStats) string {
 // FinishUpload writes summary statistics at the end of an upload.
 func (p *Progress) FinishUpload(u Upload) {
 	stats := u.Stats()
-	glog.Infof("All done in %v: %+v", time.Now().Sub(p.start), stats)
+	glog.Infof("All done in %v: %+v", time.Now().Sub(p.start).Truncate(time.Second), stats)
 	fmt.Fprintf(
 		p.w,
 		"All done in %v. Uploaded %v in %v file(s). Kept %v in %v file(s).\n",

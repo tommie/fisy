@@ -215,10 +215,15 @@ func (u *fakeUpload) Stats() transfer.UploadStats {
 		KeptBytes:     3,
 		KeptFiles:     4,
 	}
-	us.SetLast("test", nil, nil)
+	us.SetLast("test", &fakeFileInfo{}, &fakeFileInfo{})
 	return us
 }
 
 type fakeFileInfo struct {
 	os.FileInfo
 }
+
+func (*fakeFileInfo) Mode() os.FileMode  { return 0 }
+func (*fakeFileInfo) ModTime() time.Time { return time.Time{} }
+func (*fakeFileInfo) Name() string       { return "file" }
+func (*fakeFileInfo) Size() int64        { return 0 }
