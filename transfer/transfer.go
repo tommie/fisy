@@ -44,10 +44,19 @@ type filePair struct {
 // FileInfo returns overall file information about the file.
 func (fp *filePair) FileInfo() os.FileInfo {
 	if fp.src != nil {
-		return fp.src
+		return &filePairInfo{fp.src, fp.path}
 	}
-	return fp.dest
+	return &filePairInfo{fp.dest, fp.path}
 }
+
+// A filePairInfo is a FileInfo for a filePair. It overrides the name
+// to be the full relative path.
+type filePairInfo struct {
+	os.FileInfo
+	path fs.Path
+}
+
+func (fi *filePairInfo) Name() string { return string(fi.path) }
 
 // FileOperation returns the type of operation this file pair needs to
 // synchronize.

@@ -94,7 +94,7 @@ func TestUploadTransfer(t *testing.T) {
 			t.Fatalf("transfer failed: %v", err)
 		}
 
-		if want := []os.FileInfo{src, src}; !reflect.DeepEqual(fis, want) {
+		if want := []os.FileInfo{&filePairInfo{src, "file1"}, &filePairInfo{src, "file1"}}; !reflect.DeepEqual(fis, want) {
 			t.Errorf("transfer FileInfo: got %+v, want %+v", fis, want)
 		}
 		if want := []FileOperation{Create, Create}; !reflect.DeepEqual(ops, want) {
