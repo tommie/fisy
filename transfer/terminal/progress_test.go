@@ -117,7 +117,7 @@ func TestProgressFormatUploadStats(t *testing.T) {
 		w:      &out,
 		period: 10 * time.Millisecond,
 		// Short enough to cut the string.
-		width: 30,
+		width: 26,
 	}
 
 	us := transfer.UploadStats{
@@ -131,7 +131,7 @@ func TestProgressFormatUploadStats(t *testing.T) {
 	us.SetLast("test", &fakeFileInfo{}, nil)
 	got := p.formatUploadStats(&us)
 
-	if want := "    1 /  +2.0 B / 3 / 4: R tes"; got != want {
+	if want := "    1 /  +2.0 B / 3: R tes"; got != want {
 		t.Errorf("formatUploadStats: got %q, want %q", got, want)
 	}
 }

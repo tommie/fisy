@@ -94,11 +94,10 @@ loop:
 // printUploadStats displays ongoing progress for an Upload.
 func (p *Progress) formatUploadStats(st *transfer.UploadStats) string {
 	s := fmt.Sprintf(
-		"%5d / %7s / %d / %d: %c %s",
+		"%5d / %7s / %d: %c %s",
 		st.SourceFiles,
 		"+"+storageBytes(st.UploadedBytes),
 		st.InProgress,
-		st.InodeTable,
 		st.LastFileOperation(),
 		st.LastPath())
 	if len(s) > p.width {
