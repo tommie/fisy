@@ -168,6 +168,10 @@ func (u *Upload) createSymlink(fp *filePair) error {
 	glog.V(1).Infof("Symlinking %q to %q...", fp.path, linkdest)
 	atomic.AddUint64(&u.stats.UploadedBytes, uint64(len(linkdest)))
 	atomic.AddUint64(&u.stats.UploadedFiles, 1)
+	// TODO: The SFTP client library doesn't support the
+	// lsetstat@openssh.com extension, so mtime will never be
+	// right. Until there is support, we have no choice but to
+	// always re-upload symlinks.
 	return u.dest.Symlink(linkdest, fp.path)
 }
 
