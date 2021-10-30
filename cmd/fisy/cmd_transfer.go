@@ -23,10 +23,9 @@ var transferCmd = cobra.Command{
 	Short: "Transfers files in one direction.",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx := context.Background()
-
-		return runTransfer(ctx, cmd, args[0], args[1])
+		return runTransfer(cmd.Context(), cmd, args[0], args[1])
 	},
+	SilenceUsage: true,
 }
 
 func init() {

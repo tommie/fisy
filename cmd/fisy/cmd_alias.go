@@ -20,10 +20,11 @@ func init() {
 	for _, path := range ps {
 		name := strings.TrimSuffix(filepath.Base(path), ".alias")
 		rootCmd.AddCommand(&cobra.Command{
-			Use:   name,
-			Short: "Alias found in " + path,
-			RunE:  runAnAlias,
+			Use:                name,
+			Short:              "Alias found in " + path,
+			RunE:               runAnAlias,
 			DisableFlagParsing: true,
+			SilenceUsage:       true,
 		})
 	}
 }
