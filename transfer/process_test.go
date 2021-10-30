@@ -3,6 +3,7 @@ package transfer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"reflect"
@@ -158,6 +159,31 @@ func TestProcessPropagatesTransferError(t *testing.T) {
 	})
 }
 
+func TestProcessCanIgnoreListDirErrors(t *testing.T) {
+	errPerm := fmt.Errorf("mocked: %w", os.ErrPermission)
+
+	ctx := context.Background()
+
+	p := newTestProcess()
+
+	p.transfer = func(ctx context.Context, fp *filePair) error {
+		return nil
+	}
+	p.src.(*fakeListingFileSystem).readDirErr = errPerm
+
+	_, err := p.process(ctx, &filePair{path: fs.Path("dir1"), src: &fakeListingFileInfo{name: "dir1", mode: os.ModeDir}})
+	if err != nil {
+		t.Fatalf("process error: got %v, want %v", err, nil)
+	}
+
+	if got, want := int(p.stats.FailedDirectories), 0; got != want {
+		t.Errorf("Run stats.FailedDirectories: got %v, want %v", got, want)
+	}
+	if got, want := int(p.stats.FailedFiles), 0; got != want {
+		t.Errorf("Run stats.FailedFiles: got %v, want %v", got, want)
+	}
+}
+
 func TestProcessListDir(t *testing.T) {
 	p := newTestProcess()
 
@@ -273,19 +299,21 @@ func newTestProcess() process {
 type fakeListingFileSystem struct {
 	fs.WriteableFileSystem
 
-	fis  map[fs.Path][]os.FileInfo
-	data map[fs.Path][]byte
+	fis        map[fs.Path][]os.FileInfo
+	data       map[fs.Path][]byte
+	readDirErr error
 }
 
 func (fs *fakeListingFileSystem) Open(path fs.Path) (fs.FileReader, error) {
-	return &fakeListingFileReader{fis: fs.fis[path], data: fs.data[path]}, nil
+	return &fakeListingFileReader{fis: fs.fis[path], data: fs.data[path], readDirErr: fs.readDirErr}, nil
 }
 
 type fakeListingFileReader struct {
 	fs.FileReader
 
-	fis  []os.FileInfo
-	data []byte
+	fis        []os.FileInfo
+	data       []byte
+	readDirErr error
 }
 
 func (fr *fakeListingFileReader) Close() error {
@@ -308,7 +336,7 @@ func (fr *fakeListingFileReader) Read(bs []byte) (int, error) {
 }
 
 func (fr *fakeListingFileReader) Readdir() ([]os.FileInfo, error) {
-	return fr.fis, nil
+	return fr.fis, fr.readDirErr
 }
 
 type fakeListingFileInfo struct {

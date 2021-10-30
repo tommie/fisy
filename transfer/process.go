@@ -75,23 +75,30 @@ func (p *process) process(ctx context.Context, fp *filePair) ([]*filePair, error
 		eg.Go(func() error {
 			var err error
 			fps, err = p.listDir(fp.path)
+			if err == nil {
+				return nil
+			} else if fs.IsPermission(err) {
+				glog.Warningf("Listing directory failed (ignored): %v", err)
+				return nil
+			}
 			return err
 		})
 	}
 	eg.Go(func() error {
-		err := p.transfer(ctx, fp)
-		if err != nil {
-			if isDir {
-				atomic.AddUint64(&p.stats.FailedDirectories, 1)
-			} else {
-				atomic.AddUint64(&p.stats.FailedFiles, 1)
-			}
-			glog.Errorf("Failed to transfer %q: %v", fp.path, err)
-			glog.V(1).Infof("Source: %+v\nDestination: %+v", fp.src, fp.dest)
-		}
-		return err
+		return p.transfer(ctx, fp)
 	})
-	return fps, eg.Wait()
+	if err := eg.Wait(); err != nil {
+		if isDir {
+			atomic.AddUint64(&p.stats.FailedDirectories, 1)
+		} else {
+			atomic.AddUint64(&p.stats.FailedFiles, 1)
+		}
+
+		glog.Errorf("Failed to transfer %q: %v", fp.path, err)
+		glog.V(1).Infof("Source: %+v\nDestination: %+v", fp.src, fp.dest)
+		return nil, err
+	}
+	return fps, nil
 }
 
 // listDir creates file pairs for the children of the given directory.
