@@ -4,6 +4,7 @@ RM ?= rm
 
 GOBUILDFLAGS ?=
 GOTESTFLAGS ?=
+GOTESTTARGETFLAGS ?=
 
 build_source = $(shell git remote show -n "$$(git remote show -n | head -n1)" | sed -E -e 's;\s*Fetch URL: (.*);\1; p ; d' || :)
 build_branch = $(shell git symbolic-ref --short --quiet HEAD || :)
@@ -30,4 +31,4 @@ configure:
 
 .PHONY: check
 check:
-	$(GO) test $(EXTRA_GOBUILDFLAGS) $(GOBUILDFLAGS) $(GOTESTFLAGS) ./...
+	$(GO) test $(EXTRA_GOBUILDFLAGS) $(GOBUILDFLAGS) $(GOTESTFLAGS) ./... $(GOTESTTARGETFLAGS)
