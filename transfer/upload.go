@@ -18,6 +18,8 @@ type Upload struct {
 	process
 
 	srcLinks linkSet
+	gidMap   func(int) int
+	uidMap   func(int) int
 
 	stats    UploadStats
 	fileHook FileHook
@@ -32,6 +34,8 @@ func NewUpload(dest fs.WriteableFileSystem, src fs.ReadableFileSystem, opts ...U
 		},
 
 		srcLinks: newLinkSet(),
+		gidMap:   func(srcGID int) int { return srcGID },
+		uidMap:   func(srcUID int) int { return srcUID },
 
 		stats: UploadStats{
 			lastPair: &atomic.Value{},
@@ -74,6 +78,24 @@ func WithConcurrency(nconc int) UploadOpt {
 func WithFileHook(fun FileHook) UploadOpt {
 	return func(u *Upload) {
 		u.fileHook = fun
+	}
+}
+
+// WithGIDMap sets a mapping from source GID to destination. By
+// default, this is the identity function. The special value -1 can be
+// both input and output, and means "current group".
+func WithGIDMap(fun func(srcGID int) int) UploadOpt {
+	return func(u *Upload) {
+		u.gidMap = fun
+	}
+}
+
+// WithUIDMap sets a mapping from source UID to destination. By
+// default, this is the identity function. The special value -1 can be
+// both input and output, and means "current user".
+func WithUIDMap(fun func(srcUID int) int) UploadOpt {
+	return func(u *Upload) {
+		u.uidMap = fun
 	}
 }
 
@@ -213,11 +235,19 @@ func (u *Upload) copyFile(fp *filePair) error {
 			}
 			uploadedBytes = uint64(i)
 
-			if attrs, ok := fs.FileAttrsFromFileInfo(fp.src); ok {
-				if err := df.Chown(attrs.UID, attrs.GID); err != nil {
+			attrs, ok := fs.FileAttrsFromFileInfo(fp.src)
+			if ok {
+				atime = attrs.AccessTime
+			} else {
+				attrs.UID = -1
+				attrs.GID = -1
+			}
+			uid := u.uidMap(attrs.UID)
+			gid := u.gidMap(attrs.GID)
+			if uid != -1 || gid != -1 {
+				if err := df.Chown(uid, gid); err != nil {
 					return err
 				}
-				atime = attrs.AccessTime
 			}
 			return nil
 		}()
@@ -282,18 +312,24 @@ func (u *Upload) makeDirectory(fp *filePair) error {
 		glog.V(1).Infof("Creating directory %q...", fp.path)
 
 		// We force u+w so we can continue working on the directory.
-		if err := u.dest.Mkdir(fp.path, fp.src.Mode()&commonModeMask|0200, attrs.UID, attrs.GID); err != nil {
+		if err := u.dest.Mkdir(fp.path, fp.src.Mode()&commonModeMask|0200, u.uidMap(attrs.UID), u.gidMap(attrs.GID)); err != nil {
 			return err
 		}
 	} else {
 		glog.V(1).Infof("Updating directory %q (%+v %+v)...", fp.path, fp.src.ModTime(), fp.dest.ModTime())
 
 		// We force u+w so we can continue working on the directory.
-		if err := u.dest.Mkdir(fp.path, fp.src.Mode()&commonModeMask|0200, attrs.UID, attrs.GID); fs.IsExist(err) {
+		if err := u.dest.Mkdir(fp.path, fp.src.Mode()&commonModeMask|0200, u.uidMap(attrs.UID), u.gidMap(attrs.GID)); fs.IsExist(err) {
 			// ErrExist is ignored to emulate "overwrite" just like Create does for files.
-			if err := u.dest.Lchown(fp.path, attrs.UID, attrs.GID); err != nil {
-				return err
+
+			uid := u.uidMap(attrs.UID)
+			gid := u.gidMap(attrs.GID)
+			if uid != -1 || gid != -1 {
+				if err := u.dest.Lchown(fp.path, u.uidMap(attrs.UID), u.gidMap(attrs.GID)); err != nil {
+					return err
+				}
 			}
+
 			// We force u+w so we can continue working on the directory.
 			if err := u.dest.Chmod(fp.path, fp.src.Mode()&commonModeMask|0200); err != nil {
 				return err

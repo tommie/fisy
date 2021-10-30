@@ -376,7 +376,10 @@ func TestUploadCreateSymlink(t *testing.T) {
 
 func TestUploadCopyFile(t *testing.T) {
 	t.Run("normal", func(t *testing.T) {
-		u := newTestUpload()
+		u := newTestUpload(
+			WithGIDMap(func(int) int { return 42 }),
+			WithUIDMap(func(int) int { return 43 }),
+		)
 
 		err := u.copyFile(&filePair{
 			path: "file1",
@@ -393,6 +396,12 @@ func TestUploadCopyFile(t *testing.T) {
 		wfs := u.dest.(*fakeWriteableFileSystem)
 		if want := []fs.Path{"file1"}; !reflect.DeepEqual(wfs.createCalls, want) {
 			t.Errorf("createCalls: got %v, want %v", wfs.createCalls, want)
+		}
+		if want := []int{42}; !reflect.DeepEqual(wfs.chownGIDs, want) {
+			t.Errorf("chownGIDs: got %v, want %v", wfs.chownGIDs, want)
+		}
+		if want := []int{43}; !reflect.DeepEqual(wfs.chownUIDs, want) {
+			t.Errorf("chownUIDs: got %v, want %v", wfs.chownUIDs, want)
 		}
 		if want := []fs.Path{"file1"}; !reflect.DeepEqual(wfs.chtimesCalls, want) {
 			t.Errorf("chtimesCalls: got %v, want %v", wfs.chtimesCalls, want)
@@ -548,7 +557,10 @@ func TestUploadTransferDirectory(t *testing.T) {
 	})
 
 	t.Run("create", func(t *testing.T) {
-		u := newTestUpload()
+		u := newTestUpload(
+			WithGIDMap(func(int) int { return 42 }),
+			WithUIDMap(func(int) int { return 43 }),
+		)
 
 		err := u.transferDirectory(&filePair{
 			path: "dir1",
@@ -561,6 +573,12 @@ func TestUploadTransferDirectory(t *testing.T) {
 		wfs := u.dest.(*fakeWriteableFileSystem)
 		if want := []fs.Path{"dir1"}; !reflect.DeepEqual(wfs.mkdirCalls, want) {
 			t.Errorf("mkdirCalls: got %v, want %v", wfs.mkdirCalls, want)
+		}
+		if want := []int{42}; !reflect.DeepEqual(wfs.mkdirGIDs, want) {
+			t.Errorf("mkdirGIDs: got %v, want %v", wfs.mkdirGIDs, want)
+		}
+		if want := []int{43}; !reflect.DeepEqual(wfs.mkdirUIDs, want) {
+			t.Errorf("mkdirUIDs: got %v, want %v", wfs.mkdirUIDs, want)
 		}
 		if want := []fs.Path{"dir1"}; !reflect.DeepEqual(wfs.chtimesCalls, want) {
 			t.Errorf("chtimesCalls: got %v, want %v", wfs.chtimesCalls, want)
@@ -575,7 +593,10 @@ func TestUploadTransferDirectory(t *testing.T) {
 	})
 
 	t.Run("update", func(t *testing.T) {
-		u := newTestUpload()
+		u := newTestUpload(
+			WithGIDMap(func(int) int { return 42 }),
+			WithUIDMap(func(int) int { return 43 }),
+		)
 
 		err := u.transferDirectory(&filePair{
 			path: "dir1",
@@ -589,6 +610,12 @@ func TestUploadTransferDirectory(t *testing.T) {
 		wfs := u.dest.(*fakeWriteableFileSystem)
 		if want := []fs.Path{"dir1"}; !reflect.DeepEqual(wfs.mkdirCalls, want) {
 			t.Errorf("mkdirCalls: got %v, want %v", wfs.mkdirCalls, want)
+		}
+		if want := []int{42}; !reflect.DeepEqual(wfs.mkdirGIDs, want) {
+			t.Errorf("mkdirGIDs: got %v, want %v", wfs.mkdirGIDs, want)
+		}
+		if want := []int{43}; !reflect.DeepEqual(wfs.mkdirUIDs, want) {
+			t.Errorf("mkdirUIDs: got %v, want %v", wfs.mkdirUIDs, want)
 		}
 		if want := []fs.Path(nil); !reflect.DeepEqual(wfs.lchownCalls, want) {
 			t.Errorf("lchownCalls: got %v, want %v", wfs.lchownCalls, want)
@@ -609,7 +636,10 @@ func TestUploadTransferDirectory(t *testing.T) {
 	})
 
 	t.Run("update-existing-dir", func(t *testing.T) {
-		u := newTestUpload()
+		u := newTestUpload(
+			WithGIDMap(func(int) int { return 42 }),
+			WithUIDMap(func(int) int { return 43 }),
+		)
 
 		err := u.transferDirectory(&filePair{
 			path: "update-existing-dir",
@@ -626,6 +656,12 @@ func TestUploadTransferDirectory(t *testing.T) {
 		}
 		if want := []fs.Path{"update-existing-dir"}; !reflect.DeepEqual(wfs.lchownCalls, want) {
 			t.Errorf("lchownCalls: got %v, want %v", wfs.lchownCalls, want)
+		}
+		if want := []int{42}; !reflect.DeepEqual(wfs.lchownGIDs, want) {
+			t.Errorf("lchownGIDs: got %v, want %v", wfs.lchownGIDs, want)
+		}
+		if want := []int{43}; !reflect.DeepEqual(wfs.lchownUIDs, want) {
+			t.Errorf("lchownUIDs: got %v, want %v", wfs.lchownUIDs, want)
 		}
 		if want := []fs.Path{"update-existing-dir"}; !reflect.DeepEqual(wfs.chmodCalls, want) {
 			t.Errorf("chmodCalls: got %v, want %v", wfs.chmodCalls, want)
@@ -762,13 +798,19 @@ type fakeWriteableFileSystem struct {
 	chtimesCalls   []fs.Path
 	chmodCalls     []fs.Path
 	lchownCalls    []fs.Path
+	lchownUIDs     []int
+	lchownGIDs     []int
 	createCalls    []fs.Path
 	keepCalls      []fs.Path
 	mkdirCalls     []fs.Path
+	mkdirUIDs      []int
+	mkdirGIDs      []int
 	linkCalls      [][]fs.Path
 	symlinkCalls   [][]fs.Path
 	removeCalls    []fs.Path
 	removeAllCalls []fs.Path
+	chownUIDs      []int
+	chownGIDs      []int
 }
 
 func (wfs *fakeWriteableFileSystem) Open(path fs.Path) (fs.FileReader, error) {
@@ -804,7 +846,7 @@ func (wfs *fakeWriteableFileSystem) Create(path fs.Path) (fs.FileWriter, error) 
 		return nil, errMocked
 	}
 
-	return &fakeFileWriter{failChmod: path == "chmod-failing-file"}, nil
+	return &fakeFileWriter{wfs: wfs, failChmod: path == "chmod-failing-file"}, nil
 }
 
 func (wfs *fakeWriteableFileSystem) Chtimes(path fs.Path, atime, mtime time.Time) error {
@@ -819,6 +861,8 @@ func (wfs *fakeWriteableFileSystem) Chmod(path fs.Path, mode os.FileMode) error 
 
 func (wfs *fakeWriteableFileSystem) Lchown(path fs.Path, uid, gid int) error {
 	wfs.lchownCalls = append(wfs.lchownCalls, path)
+	wfs.lchownUIDs = append(wfs.lchownUIDs, uid)
+	wfs.lchownGIDs = append(wfs.lchownGIDs, gid)
 	return nil
 }
 
@@ -842,6 +886,8 @@ func (wfs *fakeWriteableFileSystem) Symlink(src, dest fs.Path) error {
 
 func (wfs *fakeWriteableFileSystem) Mkdir(path fs.Path, mode os.FileMode, uid, gid int) error {
 	wfs.mkdirCalls = append(wfs.mkdirCalls, path)
+	wfs.mkdirUIDs = append(wfs.mkdirUIDs, uid)
+	wfs.mkdirGIDs = append(wfs.mkdirGIDs, gid)
 	if path == "update-existing-dir" {
 		return os.ErrExist
 	}
@@ -861,6 +907,7 @@ func (wfs *fakeWriteableFileSystem) RemoveAll(path fs.Path) error {
 type fakeFileWriter struct {
 	fs.FileWriter
 
+	wfs       *fakeWriteableFileSystem
 	failChmod bool
 	n         int
 }
@@ -881,7 +928,9 @@ func (fw *fakeFileWriter) Chmod(os.FileMode) error {
 	return nil
 }
 
-func (*fakeFileWriter) Chown(uid, gid int) error {
+func (fw *fakeFileWriter) Chown(uid, gid int) error {
+	fw.wfs.chownUIDs = append(fw.wfs.chownUIDs, uid)
+	fw.wfs.chownGIDs = append(fw.wfs.chownGIDs, gid)
 	return nil
 }
 

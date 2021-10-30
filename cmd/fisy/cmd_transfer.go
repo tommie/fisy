@@ -14,8 +14,10 @@ import (
 
 var (
 	fileConc   int
+	gidMapSpec string
 	ignoreSpec string
 	printOps   []string
+	uidMapSpec string
 )
 
 var transferCmd = cobra.Command{
@@ -30,8 +32,10 @@ var transferCmd = cobra.Command{
 
 func init() {
 	transferCmd.PersistentFlags().IntVar(&fileConc, "file-concurrency", runtime.NumCPU()*32, "number of files/directories to work on concurrently")
+	transferCmd.PersistentFlags().StringVar(&gidMapSpec, "gid-map", "id", "GID mapping to use ('id' is identity transform, 'current' means use current effective group)")
 	transferCmd.PersistentFlags().StringVar(&ignoreSpec, "ignore", "", "filter to apply to ignore some files")
 	transferCmd.PersistentFlags().StringSliceVar(&printOps, "print-operations", nil, "types of file operations to print verbosely (a combination of create, update, keep, remove)")
+	transferCmd.PersistentFlags().StringVar(&uidMapSpec, "uid-map", "id", "UID mapping to use ('id' is identity transform, 'current' means use current effective user)")
 
 	rootCmd.AddCommand(&transferCmd)
 }
@@ -42,6 +46,16 @@ func runTransfer(ctx context.Context, cmd *cobra.Command, srcSpec, destSpec stri
 	filter, err := parseIgnoreFilter(ignoreSpec)
 	if err != nil {
 		return err
+	}
+
+	gidMap, err := makeIDMapping(gidMapSpec)
+	if err != nil {
+		return fmt.Errorf("GID mapping: %w", err)
+	}
+
+	uidMap, err := makeIDMapping(uidMapSpec)
+	if err != nil {
+		return fmt.Errorf("UID mapping: %w", err)
 	}
 
 	src, srcClose, err := makeFileSystem(srcSpec)
@@ -75,7 +89,10 @@ func runTransfer(ctx context.Context, cmd *cobra.Command, srcSpec, destSpec stri
 				return
 			}
 			p.FileHook(fi, op, err)
-		}))
+		}),
+		transfer.WithGIDMap(gidMap),
+		transfer.WithUIDMap(uidMap),
+	)
 
 	go p.RunUpload(ctx, u)
 
