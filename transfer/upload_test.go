@@ -64,6 +64,22 @@ func TestUploadTransfer(t *testing.T) {
 		}
 	})
 
+	t.Run("socket", func(t *testing.T) {
+		u := newTestUpload()
+
+		if err := u.transfer(ctx, &filePair{path: "socket1", src: &fakeListingFileInfo{name: "socket1", mode: os.ModeSocket}}); err != nil {
+			t.Fatalf("transfer failed: %v", err)
+		}
+
+		if got, want := u.stats.LastPath(), "socket1"; got != want {
+			t.Errorf("stats.LastPath: got %q, want %q", got, want)
+		}
+
+		if got, want := int(u.stats.UploadedFiles), 0; got != want {
+			t.Errorf("stats.UploadedFiles: got %v, want %v", got, want)
+		}
+	})
+
 	t.Run("retries", func(t *testing.T) {
 		u := newTestUpload()
 

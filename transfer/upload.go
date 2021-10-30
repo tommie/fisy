@@ -113,11 +113,17 @@ func (u *Upload) transfer(ctx context.Context, fp *filePair) error {
 			atomic.AddUint64(&u.stats.TransferRetries, 1)
 		}
 
-		if fp.FileInfo().Mode().IsDir() {
+		switch fp.FileInfo().Mode().Type() {
+		case os.ModeDir:
 			return u.transferDirectory(fp)
-		}
 
-		return u.transferFile(fp)
+		case 0, os.ModeSymlink:
+			return u.transferFile(fp)
+
+		default:
+			glog.Infof("Ignored special file %q (type %s).", fp.path, fp.FileInfo().Mode().Type().String())
+			return nil
+		}
 	})
 	u.fileHook(fp.FileInfo(), fp.FileOperation(), err)
 	return err
