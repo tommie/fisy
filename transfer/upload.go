@@ -275,24 +275,44 @@ func (u *Upload) makeDirectory(fp *filePair) error {
 	if !ok {
 		attrs.UID = -1
 		attrs.GID = -1
+		attrs.AccessTime = fp.src.ModTime()
 	}
 
 	if fp.dest == nil {
 		glog.V(1).Infof("Creating directory %q...", fp.path)
-		atomic.AddUint64(&u.stats.CreatedDirectories, 1)
+
 		// We force u+w so we can continue working on the directory.
-		return u.dest.Mkdir(fp.path, fp.src.Mode()&commonModeMask|0200, attrs.UID, attrs.GID)
+		if err := u.dest.Mkdir(fp.path, fp.src.Mode()&commonModeMask|0200, attrs.UID, attrs.GID); err != nil {
+			return err
+		}
+	} else {
+		glog.V(1).Infof("Updating directory %q (%+v %+v)...", fp.path, fp.src.ModTime(), fp.dest.ModTime())
+
+		// We force u+w so we can continue working on the directory.
+		if err := u.dest.Mkdir(fp.path, fp.src.Mode()&commonModeMask|0200, attrs.UID, attrs.GID); fs.IsExist(err) {
+			// ErrExist is ignored to emulate "overwrite" just like Create does for files.
+			if err := u.dest.Lchown(fp.path, attrs.UID, attrs.GID); err != nil {
+				return err
+			}
+			// We force u+w so we can continue working on the directory.
+			if err := u.dest.Chmod(fp.path, fp.src.Mode()&commonModeMask|0200); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
 	}
 
-	glog.V(1).Infof("Updating directory %q (%+v %+v)...", fp.path, fp.src.ModTime(), fp.dest.ModTime())
-	// We force u+w so we can continue working on the directory.
-	if err := u.dest.Chmod(fp.path, fp.src.Mode()&commonModeMask|0200); err != nil {
+	// This might be overwritten if we transfer files into the directory.
+	if err := u.dest.Chtimes(fp.path, attrs.AccessTime, fp.src.ModTime()); err != nil {
 		return err
 	}
-	if err := u.dest.Lchown(fp.path, attrs.UID, attrs.GID); err != nil {
-		return err
+
+	if fp.dest == nil {
+		atomic.AddUint64(&u.stats.CreatedDirectories, 1)
+	} else {
+		atomic.AddUint64(&u.stats.UpdatedDirectories, 1)
 	}
-	atomic.AddUint64(&u.stats.UpdatedDirectories, 1)
 
 	return nil
 }

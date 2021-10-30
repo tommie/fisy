@@ -394,6 +394,9 @@ func TestUploadCopyFile(t *testing.T) {
 		if want := []fs.Path{"file1"}; !reflect.DeepEqual(wfs.createCalls, want) {
 			t.Errorf("createCalls: got %v, want %v", wfs.createCalls, want)
 		}
+		if want := []fs.Path{"file1"}; !reflect.DeepEqual(wfs.chtimesCalls, want) {
+			t.Errorf("chtimesCalls: got %v, want %v", wfs.chtimesCalls, want)
+		}
 
 		if got, want := int(u.stats.UploadedFiles), 1; got != want {
 			t.Errorf("stats.UploadedFiles: got %v, want %v", got, want)
@@ -444,6 +447,9 @@ func TestUploadCopyFile(t *testing.T) {
 		if want := []fs.Path{"create-readonly-file", "create-readonly-file"}; !reflect.DeepEqual(wfs.createCalls, want) {
 			t.Errorf("createCalls: got %v, want %v", wfs.createCalls, want)
 		}
+		if want := []fs.Path{"create-readonly-file"}; !reflect.DeepEqual(wfs.chtimesCalls, want) {
+			t.Errorf("chtimesCalls: got %v, want %v", wfs.chtimesCalls, want)
+		}
 		if got, want := int(u.stats.UploadedFiles), 1; got != want {
 			t.Errorf("stats.UploadedFiles: got %v, want %v", got, want)
 		}
@@ -469,7 +475,7 @@ func TestUploadTransferDirectory(t *testing.T) {
 		u := newTestUpload()
 
 		if err := u.transferDirectory(&filePair{path: "dir1", dest: &fakeListingFileInfo{name: "dir1", mode: os.ModeDir}}); err != nil {
-			t.Fatalf("transferFile failed: %v", err)
+			t.Fatalf("transferDirectory failed: %v", err)
 		}
 
 		wfs := u.dest.(*fakeWriteableFileSystem)
@@ -499,7 +505,7 @@ func TestUploadTransferDirectory(t *testing.T) {
 
 		wfs := u.dest.(*fakeWriteableFileSystem)
 		if want := []fs.Path{"dir1"}; !reflect.DeepEqual(wfs.keepCalls, want) {
-			t.Errorf("transferDirectory keepCalls: got %v, want %v", wfs.keepCalls, want)
+			t.Errorf("keepCalls: got %v, want %v", wfs.keepCalls, want)
 		}
 
 		if got, want := int(u.stats.KeptDirectories), 1; got != want {
@@ -524,18 +530,24 @@ func TestUploadTransferDirectory(t *testing.T) {
 
 		wfs := u.dest.(*fakeWriteableFileSystem)
 		if want := []fs.Path{"keep-failing-dir"}; !reflect.DeepEqual(wfs.keepCalls, want) {
-			t.Errorf("transferDirectory keepCalls: got %v, want %v", wfs.keepCalls, want)
+			t.Errorf("keepCalls: got %v, want %v", wfs.keepCalls, want)
 		}
-		if want := []fs.Path{"keep-failing-dir"}; !reflect.DeepEqual(wfs.chmodCalls, want) {
-			t.Errorf("transferDirectory chmodCalls: got %v, want %v", wfs.chmodCalls, want)
+		if want := []fs.Path{"keep-failing-dir"}; !reflect.DeepEqual(wfs.mkdirCalls, want) {
+			t.Errorf("mkdirCalls: got %v, want %v", wfs.mkdirCalls, want)
+		}
+		if want := []fs.Path{"keep-failing-dir"}; !reflect.DeepEqual(wfs.chtimesCalls, want) {
+			t.Errorf("chtimesCalls: got %v, want %v", wfs.chtimesCalls, want)
 		}
 
 		if got, want := int(u.stats.KeptDirectories), 0; got != want {
 			t.Errorf("stats.KeptDirectories: got %v, want %v", got, want)
 		}
+		if got, want := int(u.stats.UpdatedDirectories), 1; got != want {
+			t.Errorf("stats.UpdatedDirectories: got %v, want %v", got, want)
+		}
 	})
 
-	t.Run("normal", func(t *testing.T) {
+	t.Run("create", func(t *testing.T) {
 		u := newTestUpload()
 
 		err := u.transferDirectory(&filePair{
@@ -548,11 +560,85 @@ func TestUploadTransferDirectory(t *testing.T) {
 
 		wfs := u.dest.(*fakeWriteableFileSystem)
 		if want := []fs.Path{"dir1"}; !reflect.DeepEqual(wfs.mkdirCalls, want) {
-			t.Errorf("transferDirectory mkdirCalls: got %v, want %v", wfs.mkdirCalls, want)
+			t.Errorf("mkdirCalls: got %v, want %v", wfs.mkdirCalls, want)
+		}
+		if want := []fs.Path{"dir1"}; !reflect.DeepEqual(wfs.chtimesCalls, want) {
+			t.Errorf("chtimesCalls: got %v, want %v", wfs.chtimesCalls, want)
 		}
 
 		if got, want := int(u.stats.CreatedDirectories), 1; got != want {
 			t.Errorf("stats.CreatedDirectories: got %v, want %v", got, want)
+		}
+		if got, want := int(u.stats.UpdatedDirectories), 0; got != want {
+			t.Errorf("stats.UpdatedDirectories: got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("update", func(t *testing.T) {
+		u := newTestUpload()
+
+		err := u.transferDirectory(&filePair{
+			path: "dir1",
+			src:  &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "dir1", mode: os.ModeDir}},
+			dest: &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "dir1", mode: 0123 | os.ModeDir}},
+		})
+		if err != nil {
+			t.Fatalf("transferDirectory failed: %v", err)
+		}
+
+		wfs := u.dest.(*fakeWriteableFileSystem)
+		if want := []fs.Path{"dir1"}; !reflect.DeepEqual(wfs.mkdirCalls, want) {
+			t.Errorf("mkdirCalls: got %v, want %v", wfs.mkdirCalls, want)
+		}
+		if want := []fs.Path(nil); !reflect.DeepEqual(wfs.lchownCalls, want) {
+			t.Errorf("lchownCalls: got %v, want %v", wfs.lchownCalls, want)
+		}
+		if want := []fs.Path(nil); !reflect.DeepEqual(wfs.chmodCalls, want) {
+			t.Errorf("chmodCalls: got %v, want %v", wfs.chmodCalls, want)
+		}
+		if want := []fs.Path{"dir1"}; !reflect.DeepEqual(wfs.chtimesCalls, want) {
+			t.Errorf("chtimesCalls: got %v, want %v", wfs.chtimesCalls, want)
+		}
+
+		if got, want := int(u.stats.CreatedDirectories), 0; got != want {
+			t.Errorf("stats.CreatedDirectories: got %v, want %v", got, want)
+		}
+		if got, want := int(u.stats.UpdatedDirectories), 1; got != want {
+			t.Errorf("stats.UpdatedDirectories: got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("update-existing-dir", func(t *testing.T) {
+		u := newTestUpload()
+
+		err := u.transferDirectory(&filePair{
+			path: "update-existing-dir",
+			src:  &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "update-existing-dir", mode: os.ModeDir}},
+			dest: &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "update-existing-dir", mode: 0123 | os.ModeDir}},
+		})
+		if err != nil {
+			t.Fatalf("transferDirectory failed: %v", err)
+		}
+
+		wfs := u.dest.(*fakeWriteableFileSystem)
+		if want := []fs.Path{"update-existing-dir"}; !reflect.DeepEqual(wfs.mkdirCalls, want) {
+			t.Errorf("mkdirCalls: got %v, want %v", wfs.mkdirCalls, want)
+		}
+		if want := []fs.Path{"update-existing-dir"}; !reflect.DeepEqual(wfs.lchownCalls, want) {
+			t.Errorf("lchownCalls: got %v, want %v", wfs.lchownCalls, want)
+		}
+		if want := []fs.Path{"update-existing-dir"}; !reflect.DeepEqual(wfs.chmodCalls, want) {
+			t.Errorf("chmodCalls: got %v, want %v", wfs.chmodCalls, want)
+		}
+		if want := []fs.Path{"update-existing-dir"}; !reflect.DeepEqual(wfs.chtimesCalls, want) {
+			t.Errorf("chtimesCalls: got %v, want %v", wfs.chtimesCalls, want)
+		}
+
+		if got, want := int(u.stats.CreatedDirectories), 0; got != want {
+			t.Errorf("stats.CreatedDirectories: got %v, want %v", got, want)
+		}
+		if got, want := int(u.stats.UpdatedDirectories), 1; got != want {
+			t.Errorf("stats.UpdatedDirectories: got %v, want %v", got, want)
 		}
 	})
 }
@@ -673,7 +759,9 @@ type fakeWriteableFileSystem struct {
 
 	failedCreate   bool
 	openCalls      []fs.Path
+	chtimesCalls   []fs.Path
 	chmodCalls     []fs.Path
+	lchownCalls    []fs.Path
 	createCalls    []fs.Path
 	keepCalls      []fs.Path
 	mkdirCalls     []fs.Path
@@ -719,7 +807,8 @@ func (wfs *fakeWriteableFileSystem) Create(path fs.Path) (fs.FileWriter, error) 
 	return &fakeFileWriter{failChmod: path == "chmod-failing-file"}, nil
 }
 
-func (*fakeWriteableFileSystem) Chtimes(path fs.Path, atime, mtime time.Time) error {
+func (wfs *fakeWriteableFileSystem) Chtimes(path fs.Path, atime, mtime time.Time) error {
+	wfs.chtimesCalls = append(wfs.chtimesCalls, path)
 	return nil
 }
 
@@ -728,7 +817,8 @@ func (wfs *fakeWriteableFileSystem) Chmod(path fs.Path, mode os.FileMode) error 
 	return nil
 }
 
-func (*fakeWriteableFileSystem) Lchown(path fs.Path, uid, gid int) error {
+func (wfs *fakeWriteableFileSystem) Lchown(path fs.Path, uid, gid int) error {
+	wfs.lchownCalls = append(wfs.lchownCalls, path)
 	return nil
 }
 
@@ -752,6 +842,9 @@ func (wfs *fakeWriteableFileSystem) Symlink(src, dest fs.Path) error {
 
 func (wfs *fakeWriteableFileSystem) Mkdir(path fs.Path, mode os.FileMode, uid, gid int) error {
 	wfs.mkdirCalls = append(wfs.mkdirCalls, path)
+	if path == "update-existing-dir" {
+		return os.ErrExist
+	}
 	return nil
 }
 
