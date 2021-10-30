@@ -19,27 +19,15 @@ GO_LDFLAGS = \
         -X github.com/tommie/fisy/internal/build.buildDate="$(build_date)"
 EXTRA_GOBUILDFLAGS = -ldflags "$(GO_LDFLAGS)"
 
-GENERATE_SOURCES = $(wildcard cmd/fisy/*.go)
-
-fisy_SOURCES = $(wildcard cmd/fisy/*.go)
-
 .PHONY: all
-all: go-generate
+all:
 	[ -e bin ] || mkdir -p bin
-	$(GO) build $(EXTRA_GOBUILDFLAGS) $(GOBUILDFLAGS) -o bin/fisy $(fisy_SOURCES)
+	$(GO) build $(EXTRA_GOBUILDFLAGS) $(GOBUILDFLAGS) -o bin/fisy ./cmd/fisy/
 
 .PHONY: configure
-configure: go-generate
-	$(GO) get $(EXTRA_GOBUILDFLAGS) $(GOBUILDFLAGS) ./...
-
-.PHONY: clean
-clean:
-	$(RM) -r bin
+configure:
+	$(GO) go mod download
 
 .PHONY: check
 check:
 	$(GO) test $(EXTRA_GOBUILDFLAGS) $(GOBUILDFLAGS) $(GOTESTFLAGS) ./...
-
-.PHONY: go-generate
-go-generate:
-	$(GO) generate $(EXTRA_GOBUILDFLAGS) $(GOBUILDFLAGS) $(GENERATE_SOURCES)
