@@ -8,10 +8,7 @@ import (
 )
 
 func parseIgnoreFilter(lines string) (func(fs.Path) bool, error) {
-	gi, err := ignore.CompileIgnoreLines(strings.Split(lines, "\n")...)
-	if err != nil {
-		return nil, err
-	}
+	gi := ignore.CompileIgnoreLines(strings.Split(lines, "\n")...)
 
 	return func(p fs.Path) bool {
 		return gi.MatchesPath(string(p))

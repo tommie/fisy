@@ -147,7 +147,7 @@ func TestSFTPCreate(t *testing.T) {
 
 	tree := append(testTree(), &memDirEnt{
 		Name:    "file-create",
-		Mode:    0666 &^ testUmask,
+		Mode:    0644 & ^testUmask,
 		Content: "",
 	})
 
@@ -173,7 +173,7 @@ func TestSFTPFileWriter(t *testing.T) {
 
 	tree := append(testTree(), &memDirEnt{
 		Name:    "file-create",
-		Mode:    0666 &^ testUmask,
+		Mode:    0644 & ^testUmask,
 		Content: "content create\n",
 	})
 
