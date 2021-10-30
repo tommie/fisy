@@ -30,7 +30,7 @@ var InProgress = errors.New("in progress")
 
 // commonModeMask is the non-special mode bits to transfer. Doesn't
 // include file type bits.
-const commonModeMask os.FileMode = 0xFFFFF
+const commonModeMask os.FileMode = os.ModePerm
 
 // A failPair describes a file in a transfer operation. The path
 // identifies the file on both sides. src is nil if this is file has
