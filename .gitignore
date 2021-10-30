@@ -1,4 +1,3 @@
 /bin
-/cmd/fisy/version.go
 /vendor/
 !/vendor/github.com/pkg/sftp/

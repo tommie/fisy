@@ -9,6 +9,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+
+	"github.com/tommie/fisy/internal/build"
 )
 
 func main() {
@@ -39,9 +41,8 @@ func init() {
 	pflag.Set("--stderrthreshold", "WARNING")
 }
 
-//go:generate bash generate-version-go.sh
 var rootCmd = cobra.Command{
 	Use:     fmt.Sprintf("%s <source> <destination>", filepath.Base(os.Args[0])),
 	Short:   "fisy - A bidirectional file synchronizer.",
-	Version: programVersion,
+	Version: build.VersionString(),
 }
