@@ -1,6 +1,6 @@
 # Fisy - File Synchronizer
 
-[![Build Status](https://travis-ci.org/tommie/fisy.svg?branch=master)](https://travis-ci.org/tommie/fisy)
+[![Build and Test](https://github.com/tommie/fisy/actions/workflows/makefile.yml/badge.svg)](https://github.com/tommie/fisy/actions/workflows/makefile.yml)
 [![GoDoc](https://godoc.org/github.com/tommie/fisy?status.svg)](https://godoc.org/github.com/tommie/fisy)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
