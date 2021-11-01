@@ -2,194 +2,217 @@ package terminal
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"os"
+	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang/glog"
+	"github.com/vbauerster/mpb/v7"
+	"github.com/vbauerster/mpb/v7/cwriter"
+	"github.com/vbauerster/mpb/v7/decor"
+
 	"github.com/tommie/fisy/transfer"
-	"golang.org/x/crypto/ssh/terminal"
 )
 
-// A Progress reports progress to a terminal.
-type Progress struct {
+type Progress interface {
+	FileHook(os.FileInfo, transfer.FileOperation, *uint64, error)
+	RunUpload(context.Context, Upload)
+	FinishUpload(Upload)
+}
+
+// A terminalProgress reports progress to a terminal.
+type terminalProgress struct {
 	w      io.Writer
 	period time.Duration
-	width  int
-	start  time.Time
 
-	u       Upload
-	printed bool
-	mu      sync.Mutex
+	inProgress sync.Map // map[string]*terminalFile
 }
 
 // NewProgress creates a new progress reporter. If the writer is not a
 // terminal, progress reporting is disabled.
-func NewProgress(w io.Writer, period time.Duration) *Progress {
-	width := 0
-	if f, ok := w.(*os.File); ok {
-		fd := int(f.Fd())
-		if isTerminal(fd) {
-			// TODO: React to SIGWINCH.
-			tw, _, err := terminalGetSize(fd)
-			if err != nil {
-				tw = 80
-				glog.Warningf("couldn't get terminal size (defaulting to %v): %v", tw, err)
-			}
-			width = tw - 1 // One character margin.
-		}
+func NewProgress(w io.Writer, period time.Duration) Progress {
+	if f, ok := w.(*os.File); !ok {
+		return NoOpProgress{}
+	} else if f == nil || !cwriter.IsTerminal(int(f.Fd())) {
+		return NoOpProgress{}
 	}
 
-	return &Progress{
+	return &terminalProgress{
 		w:      w,
 		period: period,
-		width:  width,
-		start:  time.Now(),
 	}
 }
 
-// FileHook is a transfer.FileHook that lets progress plot
-func (p *Progress) FileHook(fi os.FileInfo, op transfer.FileOperation, err error) {
-	if p.width == 0 {
-		return
-	}
-
+// FileHook is a transfer.FileHook that lets progress add bars for
+// slow files.
+func (p *terminalProgress) FileHook(fi os.FileInfo, op transfer.FileOperation, uploadedBytes *uint64, err error) {
 	if err == transfer.InProgress {
+		glog.Infof("Transfer %v, %d bytes: %s", op, fi.Size(), fi.Name())
+		p.inProgress.Store(fi.Name(), &terminalFile{
+			fi:            fi,
+			op:            op,
+			uploadedBytes: uploadedBytes,
+		})
 		return
 	}
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	s := fmt.Sprintf("%c %s", op, fi.Name())
-	if err != nil {
-		s = fmt.Sprintf("%s: %v", s, err)
-	}
-
-	if len(s) > p.width {
-		s = s[:p.width]
-	}
-	fmt.Fprint(p.w, s, "\033[K\n")
-
-	// Re-render the last status.
-	if p.u != nil && p.printed {
-		p.printUploadStats()
-	}
-}
-
-var (
-	// terminalGetSize is a mock injection point.
-	terminalGetSize = terminal.GetSize
-	// isTerminal is a mock injection point.
-	isTerminal = terminal.IsTerminal
-	// timeNow is a mock injection point.
-	timeNow = time.Now
-)
-
-type Upload interface {
-	Stats() transfer.UploadStats
+	p.inProgress.Delete(fi.Name())
 }
 
 // RunUpload displays progress updates until the context is cancelled.
-func (p *Progress) RunUpload(ctx context.Context, u Upload) {
-	p.mu.Lock()
-	p.u = u
-	p.mu.Unlock()
-	defer func() {
-		p.mu.Lock()
-		if p.u == u {
-			p.u = nil
-		}
-		p.mu.Unlock()
-	}()
+func (p *terminalProgress) RunUpload(ctx context.Context, u Upload) {
+	mp := mpb.NewWithContext(
+		ctx,
+		mpb.WithOutput(p.w),
+		mpb.WithRefreshRate(p.period),
+		mpb.PopCompletedMode(),
+	)
 
-	if p.width == 0 {
-		return
-	}
+	p.runUpload(ctx, mp, u)
+
+	mp.Wait()
+}
+
+func (p *terminalProgress) runUpload(ctx context.Context, mp barContainer, u Upload) {
+	bytesSp := mp.AddSpinner(
+		0,
+		mpb.BarPriority(1),
+		mpb.PrependDecorators(
+			decor.Name("Uploaded"),
+			decor.TotalKibiByte(" % .1f"),
+		),
+	)
+	filesSp := mp.AddSpinner(
+		0,
+		mpb.BarPriority(1),
+		mpb.PrependDecorators(
+			decor.Name("Files"),
+			decor.TotalNoUnit(" %d, "),
+			decor.Elapsed(decor.ET_STYLE_GO),
+		),
+	)
+	inProgBar := mp.AddBar(
+		0,
+		mpb.BarPriority(1),
+		mpb.PrependDecorators(
+			decor.Name("In Progress"),
+			decor.TotalNoUnit(" %d"),
+		),
+	)
+
+	inProgBars := map[string]*mpb.Bar{}
 
 	t := time.NewTicker(p.period)
 	defer t.Stop()
-
 loop:
 	for {
+		stats := u.Stats()
+		if inProgBar.Current() < int64(stats.InProgress) {
+			inProgBar.SetTotal(int64(stats.InProgress), false)
+		}
+		inProgBar.SetCurrent(int64(stats.InProgress))
+		filesSp.SetTotal(int64(stats.SourceFiles), false)
+		filesSp.SetCurrent(int64(stats.SourceFiles))
+		bytesSp.SetTotal(int64(stats.UploadedBytes), false)
+		bytesSp.SetCurrent(int64(stats.UploadedBytes))
+
+		inProgBars = p.updateInProgBars(inProgBars, mp, 10)
+
 		select {
 		case <-ctx.Done():
 			break loop
 		case <-t.C:
 			// Continue
 		}
-
-		func() {
-			p.mu.Lock()
-			defer p.mu.Unlock()
-			p.printUploadStats()
-			p.printed = true
-		}()
-	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.printed {
-		fmt.Fprintln(p.w)
 	}
 }
 
-// printUploadStats displays ongoing progress for the Upload.
-func (p *Progress) printUploadStats() {
-	st := p.u.Stats()
-	fmt.Fprint(p.w, "\033[1G", p.formatUploadStats(&st), "\033[K\033[1G")
+func (p *terminalProgress) updateInProgBars(inProgBars map[string]*mpb.Bar, mp barContainer, nmax int) map[string]*mpb.Bar {
+	// Show the top-10 furthest-ETA where something must be
+	// transferred. Assuming equal transfer rate, that means the files
+	// with the most remaining to upload.
+
+	// Create a slice of transfer operations.
+	tfs := make([]*terminalFile, 0, len(inProgBars))
+	p.inProgress.Range(func(_, value interface{}) bool {
+		tf := value.(*terminalFile)
+		if tf.op != transfer.Create && tf.op != transfer.Update {
+			return true
+		}
+		tfs = append(tfs, tf)
+		return true
+	})
+
+	// Reverse-sort on ETA. Furthest first.
+	sort.Slice(tfs, func(i, j int) bool {
+		return tfs[i].fi.Size()-int64(tfs[i].UploadedBytes()) > tfs[j].fi.Size()-int64(tfs[j].UploadedBytes())
+	})
+	if len(tfs) > nmax {
+		tfs = tfs[:nmax]
+	}
+
+	newInProgBars := make(map[string]*mpb.Bar, len(tfs))
+	for _, tf := range tfs {
+		newInProgBars[tf.fi.Name()] = inProgBars[tf.fi.Name()]
+	}
+
+	// Clean up the bars we are no longer interested in.
+	for path, bar := range inProgBars {
+		if _, ok := newInProgBars[path]; !ok {
+			bar.Abort(true)
+		}
+	}
+
+	// Add new bars as needed, and update the current value.
+	for _, tf := range tfs {
+		path := tf.fi.Name()
+		bar := newInProgBars[path]
+		if bar == nil {
+			bar = mp.AddBar(
+				tf.fi.Size(),
+				mpb.BarPriority(10),
+				mpb.PrependDecorators(decor.Name(shortPath(path, 40), decor.WC{W: 40, C: decor.DSyncWidthR})),
+				mpb.AppendDecorators(decor.TotalKibiByte("% .1f")),
+			)
+			newInProgBars[path] = bar
+		}
+		bar.SetCurrent(int64(tf.UploadedBytes()))
+	}
+
+	return newInProgBars
 }
 
-// formatUploadStats renders ongoing progress for UploadStats.
-func (p *Progress) formatUploadStats(st *transfer.UploadStats) string {
-	s := fmt.Sprintf(
-		"%10v / %5d / %7s / %d: %c %s",
-		timeNow().Sub(p.start).Truncate(time.Second),
-		st.SourceFiles,
-		"+"+storageBytes(st.UploadedBytes),
-		st.InProgress,
-		st.LastFileOperation(),
-		st.LastPath())
-	if len(s) > p.width {
-		s = s[:p.width]
+func shortPath(p string, max int) string {
+	if len(p) < max {
+		return p
 	}
-	return s
+	return p[:max/2-2] + "..." + p[max/2+2:]
 }
 
 // FinishUpload writes summary statistics at the end of an upload.
-func (p *Progress) FinishUpload(u Upload) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
+func (p *terminalProgress) FinishUpload(u Upload) {
 	stats := u.Stats()
-	glog.Infof("All done in %v: %+v", time.Now().Sub(p.start).Truncate(time.Second), stats)
-	fmt.Fprintf(
-		p.w,
-		"All done in %v. Uploaded %v in %v file(s). Kept %v in %v file(s).\n",
-		timeNow().Sub(p.start),
-		storageBytes(stats.UploadedBytes), stats.UploadedFiles,
-		storageBytes(stats.KeptBytes), stats.KeptFiles)
+	glog.Infof("All done: %+v", stats)
 }
 
-// storageBytesUnits is the list of multiples of 1024.
-var storageBytesUnits = []string{
-	"B", "kiB", "MiB", "GiB", "TiB", "PiB",
+type barContainer interface {
+	AddBar(total int64, options ...mpb.BarOption) *mpb.Bar
+	AddSpinner(total int64, options ...mpb.BarOption) *mpb.Bar
 }
 
-// storageBytes renders an integer as a human-friendly string.
-func storageBytes(v uint64) string {
-	f := float64(v)
-	for _, unit := range storageBytesUnits {
-		if f == 0 {
-			return fmt.Sprintf("%.0f %s", f, unit)
-		} else if f < 16 {
-			return fmt.Sprintf("%.1f %s", f, unit)
-		} else if f < 512 {
-			return fmt.Sprintf("%.0f %s", f, unit)
-		}
-		f /= 1024
-	}
-	return fmt.Sprintf("%.1f EiB", f)
+type Upload interface {
+	Stats() transfer.UploadStats
+}
+
+type terminalFile struct {
+	fi            os.FileInfo
+	op            transfer.FileOperation
+	uploadedBytes *uint64
+}
+
+func (tf *terminalFile) UploadedBytes() uint64 {
+	return atomic.LoadUint64(tf.uploadedBytes)
 }

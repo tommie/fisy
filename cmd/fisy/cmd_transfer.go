@@ -84,11 +84,11 @@ func runTransfer(ctx context.Context, cmd *cobra.Command, srcSpec, destSpec stri
 		dest, src,
 		transfer.WithIgnoreFilter(filter),
 		transfer.WithConcurrency(fileConc),
-		transfer.WithFileHook(func(fi os.FileInfo, op transfer.FileOperation, err error) {
+		transfer.WithFileHook(func(fi os.FileInfo, op transfer.FileOperation, uploadedBytes *uint64, err error) {
 			if !printOpsMap[op] {
 				return
 			}
-			p.FileHook(fi, op, err)
+			p.FileHook(fi, op, uploadedBytes, err)
 		}),
 		transfer.WithGIDMap(gidMap),
 		transfer.WithUIDMap(uidMap),

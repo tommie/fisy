@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"reflect"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -39,10 +38,6 @@ func TestUploadTransfer(t *testing.T) {
 			t.Fatalf("transfer failed: %v", err)
 		}
 
-		if got, want := u.stats.LastPath(), "dir1"; got != want {
-			t.Errorf("stats.LastPath: got %q, want %q", got, want)
-		}
-
 		if got, want := int(u.stats.CreatedDirectories), 1; got != want {
 			t.Errorf("stats.CreatedDirectories: got %v, want %v", got, want)
 		}
@@ -55,10 +50,6 @@ func TestUploadTransfer(t *testing.T) {
 			t.Fatalf("transfer failed: %v", err)
 		}
 
-		if got, want := u.stats.LastPath(), "file1"; got != want {
-			t.Errorf("stats.LastPath: got %q, want %q", got, want)
-		}
-
 		if got, want := int(u.stats.UploadedFiles), 1; got != want {
 			t.Errorf("stats.UploadedFiles: got %v, want %v", got, want)
 		}
@@ -69,10 +60,6 @@ func TestUploadTransfer(t *testing.T) {
 
 		if err := u.transfer(ctx, &filePair{path: "socket1", src: &fakeListingFileInfo{name: "socket1", mode: os.ModeSocket}}); err != nil {
 			t.Fatalf("transfer failed: %v", err)
-		}
-
-		if got, want := u.stats.LastPath(), "socket1"; got != want {
-			t.Errorf("stats.LastPath: got %q, want %q", got, want)
 		}
 
 		if got, want := int(u.stats.UploadedFiles), 0; got != want {
@@ -98,10 +85,12 @@ func TestUploadTransfer(t *testing.T) {
 	t.Run("fileHook", func(t *testing.T) {
 		var fis []os.FileInfo
 		var ops []FileOperation
+		var ubs []uint64
 		var errs []error
-		u := newTestUpload(WithFileHook(func(fi os.FileInfo, op FileOperation, err error) {
+		u := newTestUpload(WithFileHook(func(fi os.FileInfo, op FileOperation, uploadedBytes *uint64, err error) {
 			fis = append(fis, fi)
 			ops = append(ops, op)
+			ubs = append(ubs, *uploadedBytes)
 			errs = append(errs, err)
 		}))
 
@@ -116,6 +105,9 @@ func TestUploadTransfer(t *testing.T) {
 		if want := []FileOperation{Create, Create}; !reflect.DeepEqual(ops, want) {
 			t.Errorf("transfer FileOperation: got %+v, want %+v", ops, want)
 		}
+		if want := []uint64{0, 4711}; !reflect.DeepEqual(ubs, want) {
+			t.Errorf("transfer uploadedBytes: got %+v, want %+v", ubs, want)
+		}
 		if want := []error{InProgress, nil}; !reflect.DeepEqual(errs, want) {
 			t.Errorf("transfer error: got %+v, want %+v", errs, want)
 		}
@@ -126,7 +118,7 @@ func TestUploadTransferFile(t *testing.T) {
 	t.Run("remove", func(t *testing.T) {
 		u := newTestUpload()
 
-		if err := u.transferFile(&filePair{path: "file1", dest: &fakeListingFileInfo{name: "file1"}}); err != nil {
+		if err := u.transferFile(&filePair{path: "file1", dest: &fakeListingFileInfo{name: "file1"}}, new(uint64)); err != nil {
 			t.Fatalf("transferFile failed: %v", err)
 		}
 
@@ -150,7 +142,7 @@ func TestUploadTransferFile(t *testing.T) {
 			path: "failing-symlink",
 			src:  &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "failing-symlink", mode: os.ModeSymlink | 1}, inode: 42},
 			dest: &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "failing-symlink", mode: os.ModeSymlink}},
-		})
+		}, new(uint64))
 		if want := errMocked; err != want {
 			t.Fatalf("transferFile error: got %v, want %v", err, want)
 		}
@@ -166,7 +158,7 @@ func TestUploadTransferFile(t *testing.T) {
 		u.srcLinks.FinishedFile(fs.Path("firstfile"), &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "firstfile"}, inode: 42})
 		u.srcLinks.Fulfill(42)
 
-		if err := u.transferFile(&filePair{path: "file1", src: &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "file1"}, inode: 42}}); err != nil {
+		if err := u.transferFile(&filePair{path: "file1", src: &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "file1"}, inode: 42}}, new(uint64)); err != nil {
 			t.Fatalf("transferFile failed: %v", err)
 		}
 
@@ -186,7 +178,7 @@ func TestUploadTransferFile(t *testing.T) {
 	t.Run("linkFirst", func(t *testing.T) {
 		u := newTestUpload()
 
-		if err := u.transferFile(&filePair{path: "file1", src: &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "file1", size: 4711}, inode: 42}}); err != nil {
+		if err := u.transferFile(&filePair{path: "file1", src: &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "file1", size: 4711}, inode: 42}}, new(uint64)); err != nil {
 			t.Fatalf("transferFile failed: %v", err)
 		}
 
@@ -214,7 +206,7 @@ func TestUploadTransferFile(t *testing.T) {
 			path: "file1",
 			src:  &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "file1", size: 4711}},
 			dest: &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "file1", size: 4711}},
-		})
+		}, new(uint64))
 		if err != nil {
 			t.Fatalf("transferFile failed: %v", err)
 		}
@@ -239,7 +231,7 @@ func TestUploadTransferFile(t *testing.T) {
 			path: "keep-failing-file",
 			src:  &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "keep-failing-file"}},
 			dest: &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "keep-failing-file"}},
-		})
+		}, new(uint64))
 		if err != nil {
 			t.Fatalf("transferFile failed: %v", err)
 		}
@@ -263,7 +255,7 @@ func TestUploadTransferFile(t *testing.T) {
 		err := u.transferFile(&filePair{
 			path: "file1",
 			src:  &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "file1", mode: os.ModeSymlink}},
-		})
+		}, new(uint64))
 		if err != nil {
 			t.Fatalf("transferFile failed: %v", err)
 		}
@@ -287,7 +279,7 @@ func TestUploadTransferFile(t *testing.T) {
 		err := u.transferFile(&filePair{
 			path: "file1",
 			src:  &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "file1", size: 4711}},
-		})
+		}, new(uint64))
 		if err != nil {
 			t.Fatalf("transferFile failed: %v", err)
 		}
@@ -400,7 +392,7 @@ func TestUploadCopyFile(t *testing.T) {
 		err := u.copyFile(&filePair{
 			path: "file1",
 			src:  &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "file1", size: 4711}},
-		})
+		}, new(uint64))
 		if err != nil {
 			t.Fatalf("copyFile failed: %v", err)
 		}
@@ -435,7 +427,7 @@ func TestUploadCopyFile(t *testing.T) {
 		u := newTestUpload()
 
 		src := &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "missing-file"}}
-		err := u.copyFile(&filePair{path: "missing-file", src: src})
+		err := u.copyFile(&filePair{path: "missing-file", src: src}, new(uint64))
 		if want := errDiscarded; err != want {
 			t.Fatalf("copyFile error: got %v, want %v", err, want)
 		}
@@ -449,7 +441,7 @@ func TestUploadCopyFile(t *testing.T) {
 		u := newTestUpload()
 
 		src := &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "create-failing-file"}}
-		err := u.copyFile(&filePair{path: "create-failing-file", src: src})
+		err := u.copyFile(&filePair{path: "create-failing-file", src: src}, new(uint64))
 		if want := errMocked; err != want {
 			t.Fatalf("copyFile error: got %v, want %v", err, want)
 		}
@@ -463,7 +455,7 @@ func TestUploadCopyFile(t *testing.T) {
 		u := newTestUpload()
 
 		src := &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "create-readonly-file"}}
-		err := u.copyFile(&filePair{path: "create-readonly-file", src: src})
+		err := u.copyFile(&filePair{path: "create-readonly-file", src: src}, new(uint64))
 		if err != nil {
 			t.Fatalf("copyFile failed: %v", err)
 		}
@@ -484,7 +476,7 @@ func TestUploadCopyFile(t *testing.T) {
 		u := newTestUpload()
 
 		src := &fakeUploadFileInfo{fakeListingFileInfo: fakeListingFileInfo{name: "chmod-failing-file"}}
-		err := u.copyFile(&filePair{path: "chmod-failing-file", src: src})
+		err := u.copyFile(&filePair{path: "chmod-failing-file", src: src}, new(uint64))
 		if want := errMocked; err != want {
 			t.Fatalf("copyFile error: got %v, want %v", err, want)
 		}
@@ -714,10 +706,7 @@ func TestUploadStats(t *testing.T) {
 			RemovedDirectories: 10,
 			DiscardedFiles:     11,
 			TransferRetries:    12,
-
-			lastPair: &atomic.Value{},
 		}
-		want.lastPair.Store(&filePair{})
 
 		u.srcLinks.inodes[42] = nil
 		u.stats = want
@@ -725,28 +714,6 @@ func TestUploadStats(t *testing.T) {
 
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("CopyFrom: got %+v, want %+v", got, want)
-		}
-	})
-
-	t.Run("lastPath", func(t *testing.T) {
-		us := UploadStats{
-			lastPair: &atomic.Value{},
-		}
-		us.lastPair.Store(&filePair{path: "file"})
-
-		if want := "file"; us.LastPath() != want {
-			t.Errorf("LastPath: got %v, want %v", us.LastPath(), want)
-		}
-	})
-
-	t.Run("lastFileOperationCreate", func(t *testing.T) {
-		us := UploadStats{
-			lastPair: &atomic.Value{},
-		}
-		us.lastPair.Store(&filePair{src: &fakeListingFileInfo{}})
-
-		if want := Create; us.LastFileOperation() != want {
-			t.Errorf("LastFileOperation: got %v, want %v", us.LastPath(), want)
 		}
 	})
 }

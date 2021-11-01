@@ -37,10 +37,7 @@ func NewUpload(dest fs.WriteableFileSystem, src fs.ReadableFileSystem, opts ...U
 		gidMap:   func(srcGID int) int { return srcGID },
 		uidMap:   func(srcUID int) int { return srcUID },
 
-		stats: UploadStats{
-			lastPair: &atomic.Value{},
-		},
-		fileHook: func(os.FileInfo, FileOperation, error) {},
+		fileHook: func(os.FileInfo, FileOperation, *uint64, error) {},
 	}
 	u.process.stats = &u.stats.ProcessStats
 	u.process.transfer = u.transfer
@@ -104,10 +101,9 @@ func WithUIDMap(fun func(srcUID int) int) UploadOpt {
 func (u *Upload) transfer(ctx context.Context, fp *filePair) error {
 	var nattempts int
 
-	u.fileHook(fp.FileInfo(), fp.FileOperation(), InProgress)
+	var uploadedBytes uint64
+	u.fileHook(fp.FileInfo(), fp.FileOperation(), &uploadedBytes, InProgress)
 	err := remote.Idempotent(ctx, func() error {
-		u.stats.lastPair.Store(fp)
-
 		nattempts++
 		if nattempts > 1 {
 			atomic.AddUint64(&u.stats.TransferRetries, 1)
@@ -118,21 +114,21 @@ func (u *Upload) transfer(ctx context.Context, fp *filePair) error {
 			return u.transferDirectory(fp)
 
 		case 0, os.ModeSymlink:
-			return u.transferFile(fp)
+			return u.transferFile(fp, &uploadedBytes)
 
 		default:
 			glog.Infof("Ignored special file %q (type %s).", fp.path, fp.FileInfo().Mode().Type().String())
 			return nil
 		}
 	})
-	u.fileHook(fp.FileInfo(), fp.FileOperation(), err)
+	u.fileHook(fp.FileInfo(), fp.FileOperation(), &uploadedBytes, err)
 	return err
 }
 
 var errDiscarded = errors.New("file discarded")
 
 // transferFile transfers a single file from source to dest.
-func (u *Upload) transferFile(fp *filePair) (rerr error) {
+func (u *Upload) transferFile(fp *filePair, byteCount *uint64) (rerr error) {
 	if fp.src == nil {
 		// Removed file.
 		glog.V(1).Infof("Removing file %q...", fp.path)
@@ -180,7 +176,7 @@ func (u *Upload) transferFile(fp *filePair) (rerr error) {
 		return u.createSymlink(fp)
 	}
 
-	return u.copyFile(fp)
+	return u.copyFile(fp, byteCount)
 }
 
 func (u *Upload) createSymlink(fp *filePair) error {
@@ -204,7 +200,7 @@ func (u *Upload) createSymlink(fp *filePair) error {
 }
 
 // copyFile copies a file byte-by-byte.
-func (u *Upload) copyFile(fp *filePair) error {
+func (u *Upload) copyFile(fp *filePair, byteCount *uint64) error {
 	sf, err := u.src.Open(fp.path)
 	if err != nil {
 		if fs.IsNotExist(err) {
@@ -235,7 +231,7 @@ func (u *Upload) copyFile(fp *filePair) error {
 			}
 
 			glog.V(1).Infof("Uploading file %q (%d bytes)...", fp.path, fp.src.Size())
-			i, err := io.Copy(df, sf)
+			i, err := io.Copy(df, &countingReadCloser{sf, byteCount})
 			if err != nil {
 				return err
 			}
@@ -380,8 +376,6 @@ func (u *Upload) Stats() UploadStats {
 
 		DiscardedFiles:  atomic.LoadUint64(&u.stats.DiscardedFiles),
 		TransferRetries: atomic.LoadUint64(&u.stats.TransferRetries),
-
-		lastPair: u.stats.lastPair,
 	}
 	us.ProcessStats.CopyFrom(&u.stats.ProcessStats)
 	return us
@@ -408,31 +402,15 @@ type UploadStats struct {
 
 	DiscardedFiles  uint64
 	TransferRetries uint64
-
-	lastPair *atomic.Value // *filePair
 }
 
-// LastPath returns the last path the upload transfer touched.
-func (us *UploadStats) LastPath() string {
-	if fp, ok := us.lastPair.Load().(*filePair); ok {
-		return string(fp.path)
-	}
-	return ""
+type countingReadCloser struct {
+	io.ReadCloser
+	n *uint64
 }
 
-// LastFileOperation returns the type of operation that was last
-// performed.
-func (us *UploadStats) LastFileOperation() FileOperation {
-	if fp, ok := us.lastPair.Load().(*filePair); ok {
-		return fp.FileOperation()
-	}
-	return UnknownFileOperation
-}
-
-// SetLast sets the last operation. This is only used in testing.
-func (us *UploadStats) SetLast(path fs.Path, dest, src os.FileInfo) {
-	if us.lastPair == nil {
-		us.lastPair = &atomic.Value{}
-	}
-	us.lastPair.Store(&filePair{path: path, dest: dest, src: src})
+func (r *countingReadCloser) Read(bs []byte) (int, error) {
+	n, err := r.ReadCloser.Read(bs)
+	atomic.AddUint64(r.n, uint64(n))
+	return n, err
 }

@@ -21,8 +21,9 @@ const (
 )
 
 // A FileHook is a function that is called with updates about a file
-// transfer.
-type FileHook func(os.FileInfo, FileOperation, error)
+// transfer. uploadedBytes must be accessed using atomic.LoadUint64,
+// if done outside the hook function.
+type FileHook func(fi os.FileInfo, op FileOperation, uploadedBytes *uint64, err error)
 
 // InProgress indicates that the file is being transferred. It's a
 // temporary condition, not an error.
