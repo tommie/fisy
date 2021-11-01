@@ -27,7 +27,7 @@ all:
 
 .PHONY: configure
 configure:
-	$(GO) go mod download
+	$(GO) mod download
 
 .PHONY: check
 check:
