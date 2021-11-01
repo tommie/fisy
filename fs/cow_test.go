@@ -322,7 +322,7 @@ func TestCOWMkdir(t *testing.T) {
 	fs, done := newTestCOW(t)
 	defer done()
 
-	err := fs.Mkdir(Path("dir-make"), 0700, os.Geteuid(), os.Geteuid())
+	err := fs.Mkdir(Path("dir-make"), 0700, os.Getuid(), os.Getgid())
 	if err != nil {
 		t.Fatalf("Mkdir failed: %v", err)
 	}
